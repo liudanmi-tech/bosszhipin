@@ -69,7 +69,8 @@ def main():
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
 
-    cfg = load_config(args.config) if args.config else load_config()
+    need_resume = args.command != "login"
+    cfg = load_config(args.config, need_resume) if args.config else load_config(need_resume=need_resume)
     with sync_playwright() as pw:
         ctx = open_context(pw, args.platform)
         site = PLATFORMS[args.platform](ctx, cfg["safety"])
