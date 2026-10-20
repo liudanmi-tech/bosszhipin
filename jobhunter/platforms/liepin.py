@@ -13,11 +13,7 @@ class Liepin(Platform):
     def is_logged_in(self) -> bool:
         raise NotImplementedError("TODO: 校准猎聘登录态选择器")
 
-    def search(self, keyword: str, city: str) -> list[Job]:
-        # 搜索页：https://www.liepin.com/zhaopin/?key=<keyword>
-        raise NotImplementedError
-
-    def fetch_detail(self, job: Job) -> Job:
+    def browse(self, keyword, city, limit=15, skip=lambda _id: False):
         raise NotImplementedError
 
     def apply(self, job: Job, greeting: str) -> bool:

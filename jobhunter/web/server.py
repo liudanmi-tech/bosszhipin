@@ -146,31 +146,35 @@ class State:
             if not self._login(platform):
                 continue
             site = self.worker.site(platform, self.safety())
+            site.log = self.log
             for keyword in s["keywords"]:
                 for city in cities:
                     if self.stop:
                         return
                     self.log(f"[{site.label}] 搜索「{keyword}」@ {city}")
+                    to_apply = []
                     try:
-                        found = site.search(keyword, city)
+                        for job in site.browse(keyword, city, s["max_per_search"],
+                                               skip=lambda jid: f"{platform}:{jid}" in self.jobs):
+                            if self.stop:
+                                return
+                            try:
+                                entry = self._screen_one(matcher, store, f"{platform}:{job.job_id}", job)
+                            except Exception as e:  # noqa: BLE001
+                                self.log(f"  跳过 {job.title}：{e}")
+                                continue
+                            if entry["status"] == "matched" and s["auto_apply"]:
+                                to_apply.append(entry)
                     except Exception as e:  # noqa: BLE001
                         self.log(f"[{site.label}] 搜索失败：{e}")
-                        continue
-                    self.log(f"[{site.label}] 找到 {len(found)} 个岗位")
-                    for job in found[: s["max_per_search"]]:
+                    # 投递会离开列表页，所以这一页看完后再逐个投递
+                    for entry in to_apply:
                         if self.stop:
                             return
-                        key = f"{platform}:{job.job_id}"
-                        if key in self.jobs:
-                            continue
-                        try:
-                            self._screen_one(site, matcher, store, key, job)
-                        except Exception as e:  # noqa: BLE001
-                            self.log(f"  跳过 {job.title}：{e}")
+                        self._apply_one(site, store, entry)
 
-    def _screen_one(self, site, matcher, store, key, job: Job) -> None:
+    def _screen_one(self, matcher, store, key, job: Job) -> dict:
         s = self.settings
-        site.fetch_detail(job)
         match = matcher.score(job)
         matched = match.score >= s["threshold"]
         entry = {
@@ -185,8 +189,7 @@ class State:
 
         if matched and s["auto_tailor"]:
             self._tailor(entry, matcher)
-        if matched and s["auto_apply"]:
-            self._apply_one(site, store, entry)
+        return entry
 
     def run_apply(self, keys: list[str]) -> None:
         store = self.storage()
@@ -197,6 +200,7 @@ class State:
             if not entry or entry["status"] == "applied":
                 continue
             site = self.worker.site(entry["platform"], self.safety())
+            site.log = self.log
             self._apply_one(site, store, entry)
 
     def _apply_one(self, site, store, entry: dict) -> None:

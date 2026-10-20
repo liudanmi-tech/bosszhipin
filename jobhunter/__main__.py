@@ -8,10 +8,11 @@ import argparse
 
 from playwright.sync_api import sync_playwright
 
-from .browser import open_context
+from .browser import human_pause, open_context
 from .config import load_config
 from .llm import LLM
 from .matcher import Matcher
+from .models import Job
 from .platforms import PLATFORMS
 from .storage import Storage
 
@@ -27,25 +28,30 @@ def cmd_run(site, cfg, matcher, store, dry_run):
     threshold = cfg["llm"].get("match_threshold", 75)
     limit = safety.get("daily_apply_limit", 30)
 
+    def seen(job_id: str) -> bool:
+        return store.seen(Job(site.name, job_id, "", "", ""))
+
     for keyword in prefs["keywords"]:
         for city in prefs.get("cities") or ["全国"]:
-            for job in site.search(keyword, city):
+            matched = []
+            for job in site.browse(keyword, city, skip=seen):
+                match = matcher.score(job)
+                print(f"{match.score:>3}  {job.summary()}\n     {match.reasons}")
+                if match.score < threshold or dry_run:
+                    store.record(job, match, "skipped" if match.score < threshold else "seen")
+                else:
+                    matched.append((job, match))
+
+            # 投递会离开列表页，所以整页看完后再逐个投递
+            for job, match in matched:
                 if store.applied_today(site.name) >= limit:
                     print(f"已达今日投递上限 {limit}，停止。")
                     return
-                if store.seen(job):
-                    continue
-                site.fetch_detail(job)
-                match = matcher.score(job)
-                print(f"{match.score:>3}  {job.summary()}\n     {match.reasons}")
-
-                if match.score < threshold or dry_run:
-                    store.record(job, match, "skipped" if match.score < threshold else "seen")
-                    continue
-                print(f"     打招呼：{match.greeting}")
+                print(f"\n{match.score:>3}  {job.summary()}\n     打招呼：{match.greeting}")
                 if confirm("     投递该职位？", safety) and site.apply(job, match.greeting):
                     store.record(job, match, "applied")
                     print("     ✓ 已投递")
+                    human_pause(safety)
                 else:
                     store.record(job, match, "skipped")
 

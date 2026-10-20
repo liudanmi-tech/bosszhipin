@@ -1,7 +1,11 @@
+import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page
 
+from ..config import ROOT
 from ..models import Job
 
 
@@ -20,6 +24,7 @@ class Platform(ABC):
         self.ctx = ctx
         self.safety = safety
         self.page: Page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        self.log: Callable[[str], None] = print
 
     def ensure_login(self) -> None:
         """打开首页；未登录时等待用户在浏览器里手动扫码。"""
@@ -42,12 +47,12 @@ class Platform(ABC):
     def is_logged_in(self) -> bool: ...
 
     @abstractmethod
-    def search(self, keyword: str, city: str) -> list[Job]:
-        """按关键词+城市搜索，返回职位列表（至少含 job_id/title/company/url）。"""
+    def browse(self, keyword: str, city: str, limit: int = 15,
+               skip: Callable[[str], bool] = lambda _id: False) -> Iterator[Job]:
+        """像真人一样搜索并逐个点开岗位，每看完一个（含职位描述）就 yield 一个。
 
-    @abstractmethod
-    def fetch_detail(self, job: Job) -> Job:
-        """补全职位描述等详情。"""
+        skip(job_id) 为 True 的岗位（已看过）不点开。
+        """
 
     @abstractmethod
     def apply(self, job: Job, greeting: str) -> bool:
@@ -59,3 +64,14 @@ class Platform(ABC):
 
     def send_message(self, handle, text: str) -> None:
         raise NotImplementedError
+
+    def dump_debug(self, tag: str) -> Path:
+        """保存当前页面截图和 HTML，方便排查选择器失效/风控拦截。"""
+        base = ROOT / "data" / "debug" / f"{self.name}-{time.strftime('%m%d-%H%M%S')}-{tag}"
+        base.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.page.screenshot(path=f"{base}.png", full_page=True)
+            Path(f"{base}.html").write_text(self.page.content(), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+        return base.with_suffix(".png")

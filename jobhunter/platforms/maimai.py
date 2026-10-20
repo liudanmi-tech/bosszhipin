@@ -13,10 +13,7 @@ class Maimai(Platform):
     def is_logged_in(self) -> bool:
         raise NotImplementedError("TODO: 校准脉脉登录态选择器")
 
-    def search(self, keyword: str, city: str) -> list[Job]:
-        raise NotImplementedError
-
-    def fetch_detail(self, job: Job) -> Job:
+    def browse(self, keyword, city, limit=15, skip=lambda _id: False):
         raise NotImplementedError
 
     def apply(self, job: Job, greeting: str) -> bool:
