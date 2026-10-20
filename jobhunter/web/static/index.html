@@ -130,6 +130,8 @@
         <option value="deepseek/deepseek-v4-pro">DeepSeek V4 Pro · 更强，略贵</option>
         <option value="anthropic/claude-sonnet-5.5">Claude Sonnet 5.5 · 效果最好，最贵</option>
       </select>
+      <div class="actions" style="margin-top:10px"><button id="btnTestLlm">🔌 测试连接</button></div>
+      <div id="llmResult" class="hint" style="margin-top:6px;white-space:pre-wrap"></div>
     </div>
   </section>
 
@@ -321,6 +323,15 @@ $("btnSave").onclick = () => save().catch(e => toast(e.message));
 $("btnSearch").onclick = async () => {
   try { await save(true); await api("/api/search", { method: "POST" }); toast("已交给插件，进度见日志"); }
   catch (e) { toast(e.message); }
+};
+$("btnTestLlm").onclick = async () => {
+  $("llmResult").style.color = ""; $("llmResult").textContent = "测试中…";
+  try {
+    await save(true);
+    const r = await api("/api/test-llm", { method: "POST" });
+    $("llmResult").style.color = r.ok ? "var(--good)" : "var(--bad)";
+    $("llmResult").textContent = (r.ok ? "✅ " : "❌ ") + r.message;
+  } catch (e) { $("llmResult").textContent = "❌ " + e.message; }
 };
 $("btnStop").onclick = () => api("/api/stop", { method: "POST" });
 

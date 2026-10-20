@@ -351,6 +351,21 @@ def save_settings(body: dict):
     return {"ok": True}
 
 
+@app.post("/api/test-llm")
+def test_llm():
+    """用当前保存的 Key 和模型发一句话，把成功或失败原因直接告诉用户。"""
+    s = state.settings
+    if not s["api_key"]:
+        return {"ok": False, "message": "还没有填写 API Key"}
+    llm = LLM({"base_url": s["base_url"], "model": s["model"], "api_key": s["api_key"]})
+    started = time.time()
+    try:
+        reply = llm.chat("你是测试助手。", "回复「连接成功」四个字。")
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": str(e)}
+    return {"ok": True, "message": f"{s['model']} 连接成功（{time.time() - started:.1f} 秒）：{reply.strip()[:30]}"}
+
+
 @app.post("/api/resume")
 async def upload_resume(file: UploadFile):
     suffix = Path(file.filename or "").suffix.lower()
