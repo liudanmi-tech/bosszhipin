@@ -8,7 +8,7 @@ from dataclasses import asdict, fields
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from ..browser import human_pause
 from ..config import ROOT, read_resume
@@ -75,6 +75,8 @@ class State:
         self.task: str | None = None
         self.stop = False
         self.logged_in: dict[str, bool] = {}
+        self.screen: bytes = b""
+        self.screen_at = 0.0
         self.version = 0
         self.lock = threading.Lock()
         self.worker = BrowserWorker()
@@ -123,8 +125,17 @@ class State:
         self.worker.submit(wrapped)
 
     # ---------- 浏览器任务（在 worker 线程执行） ----------
-    def _login(self, platform: str) -> bool:
+    def _site(self, platform: str):
         site = self.worker.site(platform, self.safety())
+        site.log = self.log
+        site.on_snap = self._set_screen
+        return site
+
+    def _set_screen(self, jpeg: bytes) -> None:
+        self.screen, self.screen_at = jpeg, time.time()
+
+    def _login(self, platform: str) -> bool:
+        site = self._site(platform)
         self.log(f"[{site.label}] 打开登录页，未登录请在弹出的浏览器窗口中扫码（3 分钟内）")
         ok = site.wait_for_login(180)
         self.logged_in[platform] = ok
@@ -146,8 +157,7 @@ class State:
                 continue
             if not self._login(platform):
                 continue
-            site = self.worker.site(platform, self.safety())
-            site.log = self.log
+            site = self._site(platform)
             for keyword in s["keywords"]:
                 for city in cities:
                     if self.stop:
@@ -200,8 +210,7 @@ class State:
             entry = self.jobs.get(key)
             if not entry or entry["status"] == "applied":
                 continue
-            site = self.worker.site(entry["platform"], self.safety())
-            site.log = self.log
+            site = self._site(entry["platform"])
             self._apply_one(site, store, entry)
 
     def _apply_one(self, site, store, entry: dict) -> None:
@@ -332,11 +341,19 @@ def status(since: int = -1):
         "logs": list(state.logs),
         "logged_in": state.logged_in,
         "version": state.version,
+        "screen_at": state.screen_at,
         "jobs": None if since == state.version else sorted(
             ({k: v for k, v in j.items() if k != "tailored_text"} for j in state.jobs.values()),
             key=lambda j: -j["score"],
         ),
     }
+
+
+@app.get("/api/screen")
+def screen():
+    if not state.screen:
+        raise HTTPException(404, "暂无画面")
+    return Response(state.screen, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.patch("/api/jobs/{key}")

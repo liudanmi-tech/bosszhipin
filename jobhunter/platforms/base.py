@@ -25,6 +25,7 @@ class Platform(ABC):
         self.safety = safety
         self.page: Page = ctx.pages[0] if ctx.pages else ctx.new_page()
         self.log: Callable[[str], None] = print
+        self.on_snap: Callable[[bytes], None] | None = None  # 网页版「实时画面」
 
     def ensure_login(self) -> None:
         """打开首页；未登录时等待用户在浏览器里手动扫码。"""
@@ -38,6 +39,7 @@ class Platform(ABC):
         """打开首页并轮询登录状态（网页版用，无需终端回车）。"""
         self.page.goto(self.home_url)
         for _ in range(timeout_sec // 2):
+            self.snap()
             if self.is_logged_in():
                 return True
             self.page.wait_for_timeout(2000)
@@ -64,6 +66,15 @@ class Platform(ABC):
 
     def send_message(self, handle, text: str) -> None:
         raise NotImplementedError
+
+    def snap(self) -> None:
+        """截一张当前浏览器画面，推送给网页版显示。"""
+        if self.on_snap is None:
+            return
+        try:
+            self.on_snap(self.page.screenshot(type="jpeg", quality=55, timeout=5000))
+        except Exception:  # noqa: BLE001
+            pass
 
     def dump_debug(self, tag: str) -> Path:
         """保存当前页面截图和 HTML，方便排查选择器失效/风控拦截。"""

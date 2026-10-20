@@ -140,6 +140,14 @@
     </div>
 
     <div class="card">
+      <h2>🖥 BOSS 实时画面 <span class="hint" id="screenTime"></span></h2>
+      <div class="hint">程序在单独弹出的 Chrome 窗口里操作（可在程序坞找到它）。下面是那个窗口的实时截图，点击可放大；遇到滑块验证码请到那个窗口里手动完成。</div>
+      <a id="screenLink" href="/api/screen" target="_blank" style="display:none">
+        <img id="screen" alt="实时画面" style="width:100%;margin-top:10px;border:1px solid var(--line);border-radius:8px"></a>
+      <div id="screenEmpty" class="empty" style="padding:24px 0">点「登录」或「开始筛选」后这里会显示浏览器画面</div>
+    </div>
+
+    <div class="card">
       <div class="toolbar">
         <h2 style="margin:0">岗位</h2>
         <button id="btnPickHigh">选中全部高分</button>
@@ -317,12 +325,19 @@ async function poll() {
     const log = $("log"), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
     log.textContent = s.logs.join("\n"); if (atBottom) log.scrollTop = log.scrollHeight;
     if (settings.platform_options && !document.querySelector(".channel button:focus")) renderChannelsKeepChecks(s.logged_in);
+    if (s.screen_at && s.screen_at !== lastScreen) {
+      lastScreen = s.screen_at;
+      $("screen").src = `/api/screen?t=${s.screen_at}`;
+      $("screenLink").href = $("screen").src;
+      $("screenLink").style.display = "block"; $("screenEmpty").style.display = "none";
+      $("screenTime").textContent = "更新于 " + new Date(s.screen_at * 1000).toLocaleTimeString();
+    }
     if (s.jobs && !(document.activeElement && document.activeElement.dataset.greet)) {
       jobs = s.jobs; version = s.version; renderJobs();
     }
   } catch (e) { $("task").textContent = "⚠ 与本地服务断开"; }
 }
-let lastLogin = "";
+let lastLogin = "", lastScreen = 0;
 function renderChannelsKeepChecks(loggedIn) {
   const sig = JSON.stringify(loggedIn); if (sig === lastLogin) return; lastLogin = sig;
   settings.platforms = [...document.querySelectorAll(".ch-box:checked")].map(b => b.value);

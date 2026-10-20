@@ -45,10 +45,12 @@ class Boss(Platform):
             short_pause(1.5, 3)
 
         human_type(self.page, self.page.locator(SEARCH_INPUT).first, keyword)
+        self.snap()
         short_pause(0.4, 1)
         self.page.keyboard.press("Enter")
         short_pause(2, 4)
         self._wait_for(CARD, "职位列表")
+        self.snap()
 
         seen, scrolls = 0, 0
         idx = 0
@@ -68,6 +70,7 @@ class Boss(Platform):
             seen += 1
             self.log(f"  👀 查看第 {seen} 个：{job.title} @ {job.company}")
             self._read_detail(card, job)
+            self.snap()
             yield job
 
     def _card_to_job(self, card) -> Job:
@@ -123,6 +126,7 @@ class Boss(Platform):
             raise RuntimeError("之前已经沟通过这个岗位")
         human_click(self.page, btn)
         short_pause(1.5, 3)
+        self.snap()
 
         # 点击后通常弹出「已向BOSS发送消息」，选「继续沟通」进入聊天页发送自定义话术
         go_chat = self.page.locator(".dialog-container a:has-text('继续沟通'), .greet-boss-dialog .sure-btn, "
@@ -138,6 +142,7 @@ class Boss(Platform):
             short_pause(0.8, 2)
             self.page.keyboard.press("Enter")
             short_pause(1, 2)
+        self.snap()
         return True
 
     # ---------- 风控处理 ----------
@@ -151,6 +156,7 @@ class Boss(Platform):
         """等元素出现；遇到安全验证时延长到 3 分钟，并提示用户在浏览器里手动完成验证。"""
         deadline, warned = time.time() + timeout, False
         while time.time() < deadline:
+            self.snap()
             if self.page.locator(selector).count():
                 return
             if self._blocked() and not warned:
