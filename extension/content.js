@@ -21,6 +21,8 @@
 
   // BOSS 的薪资数字用动态字体加密（私有区字符），读不出就当作未知，不把乱码交给 AI
   const plainSalary = (s) => (/[\ue000-\uf8ff]/.test(s) ? "" : s);
+  // 职位名只取第一行，并去掉加密字体字符（BOSS 的职位名元素里可能混着薪资）
+  const plainTitle = (s) => s.split("\n")[0].split(/[\ue000-\uf8ff]/)[0].replace(/[\s·-]+$/, "").trim();
 
   // 找文字完全等于 texts 之一的可见元素（按钮、链接）；last=true 取最后出现的（弹窗里的）
   function findByText(texts, exclude, last = false) {
@@ -96,7 +98,7 @@
         const href = a ? a.getAttribute("href") : "";
         return {
           job_id: href ? href.split("/job_detail/")[1].split(".html")[0] : "",
-          title: textOf(card, ".job-name, .job-title"),
+          title: plainTitle(textOf(card, ".job-name, .job-title")),
           company: textOf(card, ".boss-name, .company-name, .company-info h3"),
           salary: plainSalary(textOf(card, ".job-salary, .salary")),
           city: textOf(card, ".company-location, .job-area"),
@@ -120,6 +122,7 @@
     liepin: {
       label: "猎聘",
       host: /(^|\.)liepin\.com$/,
+      minGap: [2500, 5000], // 每个岗位都要向猎聘请求一次详情页，太快会被要求验证
       pageType: (p) => p.startsWith("/zhaopin") ? "list" : /^\/(job|a)\/\d+/.test(p) ? "detail"
         : /im|chat/.test(p) ? "chat" : "other",
       searchUrl: (t) => `https://www.liepin.com/zhaopin/?key=${enc(t.keyword)}&dq=${t.city_code}`,
@@ -269,9 +272,20 @@
       return doApply();
     }
     if (!(page === "list" && site.onTarget(task, new URLSearchParams(location.search)))) {
+      // 已经跳转过、却落在了别的页面：多半是网站要求验证 / 重新登录（请求太频繁时常见），等用户处理
+      if (run.navTries >= 1 && page !== "list") {
+        if (!run.verifyNotified) {
+          run.verifyNotified = true;
+          await save();
+          log(`⚠ ${site.label}跳到了 ${location.href.slice(0, 80)}，可能要验证或登录：请在页面上完成，完成后自动继续`);
+        }
+        setStatus("等待你在页面上完成验证 / 登录…");
+        await sleep(60000);
+        if (!run) return;
+      }
       run.navTries = (run.navTries || 0) + 1;
       if (run.navTries > 3) { // 反复跳不到目标页，跳过这个搜索
-        log(`⚠ 打不开「${task.keyword}」@ ${task.city} 的搜索页，跳过`);
+        log(`⚠ 打不开「${task.keyword}」@ ${task.city} 的搜索页，跳过（停在了 ${location.href.slice(0, 80)}）`);
         run.taskIdx++; run.navTries = 0; await save();
         return doSearch();
       }
@@ -282,6 +296,7 @@
       return;
     }
     run.navTries = 0;
+    run.verifyNotified = false;
     await scanList(task);
     if (!run) return;
     run.taskIdx++;
@@ -327,7 +342,7 @@
       while (pending.size >= 3) await Promise.race(pending); // 最多同时打 3 个分
       const p = scoreJob(job).finally(() => pending.delete(p));
       pending.add(p);
-      await pause(speed.gap);
+      await pause(site.minGap && site.minGap[0] > speed.gap[0] ? site.minGap : speed.gap);
     }
     await Promise.all(pending); // 离开列表页前等所有打分回来，否则高分岗位进不了投递队列
   }

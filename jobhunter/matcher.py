@@ -43,7 +43,7 @@ class Matcher:
             f"# 原始简历\n{self.resume}\n\n"
             f"# 目标职位\n{job.summary()}\n标签：{', '.join(job.tags)}\n描述：\n{job.description}"
         )
-        return self.llm.chat(TAILOR_SYSTEM, user, temperature=0.4).strip()
+        return self.llm.chat(TAILOR_SYSTEM, user, temperature=0.4, timeout=240).strip()  # 整份简历输出较长
 
     def reply(self, job: Job, history: list[dict]) -> dict:
         convo = "\n".join(f"{m['role']}: {m['text']}" for m in history)
