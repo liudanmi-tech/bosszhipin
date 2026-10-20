@@ -246,7 +246,7 @@
   const setStatus = (s) => ui.st && (ui.st.textContent = s);
   function log(msg, remote = true) {
     if (ui.lg) { ui.lg.textContent += (ui.lg.textContent ? "\n" : "") + msg; ui.lg.scrollTop = 1e9; }
-    if (remote) api("/api/ext/log", { site: siteName, msg });
+    if (remote) api("/api/ext/log", { site: siteName, msg, run: run && run.id });
   }
 
   async function finish(reason) {
@@ -333,7 +333,7 @@
   }
 
   async function scoreJob(job) {
-    const r = await api("/api/ext/job", job);
+    const r = await api("/api/ext/job", { ...job, run: run.id });
     if (!run) return;
     if (!r.ok) {
       if (r.offline) return finish("连不上本地助手，请确认 start.command 正在运行");
@@ -348,7 +348,7 @@
     log(`${r.data.score} 分  ${job.title} @ ${job.company}`, false);
     if (r.data.apply) run.applyQueue.push({ key: r.data.key, url: job.url, greeting: r.data.greeting, title: job.title });
     await save();
-    if (r.data.stop) return finish("已停止");
+    if (r.data.stop) return finish(r.data.reason || "已停止");
   }
 
   // ---------- 投递阶段 ----------
@@ -423,9 +423,9 @@
     run.applyIdx++;
     if (ok) run.applied = (run.applied || 0) + 1;
     await save();
-    const r = await api("/api/ext/applied", { key: item.key, ok, error });
+    const r = await api("/api/ext/applied", { key: item.key, ok, error, run: run.id });
     log(`${ok ? "✅ 已投递" : "⚠ 投递失败"}：${item.title}${error ? "（" + error + "）" : ""}`, false);
-    if (r.data && r.data.stop) return finish("已停止");
+    if (r.data && r.data.stop) return finish(r.data.reason || "已停止");
     await sleep(rand(run.min_delay * 1000, run.max_delay * 1000));
     return doApply();
   }
@@ -449,7 +449,7 @@
     const r = await api(`/api/ext/poll?site=${siteName}&claim=${run ? 0 : 1}&run=${run ? run.id : ""}`);
     ui.dot && ui.dot.classList.toggle("on", !r.offline);
     if (r.offline) { if (!run) setStatus("未连接本地助手（请双击 start.command）"); return; }
-    if (run && r.data.stop) return finish("已停止");
+    if (run && r.data.stop) return finish(r.data.reason || "已停止");
     const req = r.data.request;
     if (!run && req) {
       run = { ...req, phase: req.kind === "apply" ? "apply" : "search", taskIdx: 0, applyIdx: 0, applied: 0,
@@ -466,6 +466,14 @@
     tabId = await new Promise((r) => chrome.runtime.sendMessage({ type: "tabId" }, r));
     run = (await chrome.storage.local.get(key()))[key()] || null;
     renderPanel();
+    // Chrome 会给后台标签页限流，运行中被切到后台时提醒一次
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && run && !run.hiddenWarned) { // 每个任务只提醒一次（页面跳转后脚本会重载）
+        run.hiddenWarned = true;
+        save();
+        log("💡 页面在后台会变慢：可以把这个标签页拖出来单独成一个窗口，再去看 8765 网页");
+      }
+    });
     if (run) { setStatus("继续上次的任务…"); await sleep(rand(1500, 3000)); resume(); }
     poll();
     setInterval(poll, 3000);

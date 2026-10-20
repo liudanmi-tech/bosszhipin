@@ -171,17 +171,32 @@ class State:
 
     def reap_ext(self) -> None:
         """任务没人做时结束它，免得一直挂着挡住新任务：
-        还没被领走 → 该网站没有任何页面开着；已被领走 → 领走它的那个标签页 30 秒没汇报（被关掉或跳走了）。
+        还没被领走 → 该网站 30 秒没有任何页面开着；
+        已被领走 → 领走它的那个标签页 5 分钟没汇报（被关掉或跳走了）。放宽到 5 分钟是因为
+        Chrome 会把后台标签页的定时器限流到约每分钟一次，切到别的标签页时汇报会变慢。
         """
         now = time.time()
         for site in list(self.ext_running):
             if site in self.ext_requests:
                 gone = now - self.ext_seen.get(site, 0) > 30
             else:
-                gone = now - self.ext_run_seen.get(site, 0) > 30
+                gone = now - self.ext_run_seen.get(site, 0) > 300
             if gone:
-                self.log(f"⚠ [{EXT_SITES[site]['label']}] 运行任务的页面已关闭或断开，结束该任务")
+                self.log(f"⚠ [{EXT_SITES[site]['label']}] 运行任务的页面已关闭或长时间没响应，结束该任务")
                 self.finish_ext(site)
+
+    def ext_alive(self, site: str, run: str | None) -> None:
+        """插件带着当前任务 id 来请求（轮询、提交岗位、写日志）都算「还活着」。"""
+        if run and self.ext_active_id.get(site) == run:
+            self.ext_run_seen[site] = time.time()
+
+    def ext_stop_reason(self, site: str, run: str | None) -> str:
+        """插件里正在跑的任务是否该停，以及原因（空字符串 = 不用停）。"""
+        if site in self.ext_stop:
+            return "已按停止键停止"
+        if run and self.ext_active_id.get(site) != run:
+            return "服务端已不再记录这个任务（页面长时间没响应，或程序重启过），请重新开始"
+        return ""
 
     def finish_ext(self, site: str) -> None:
         self.ext_requests.pop(site, None)
@@ -514,11 +529,11 @@ def _ext_site(site: str) -> str:
 def ext_poll(site: str, claim: int = 0, run: str = ""):
     state.ext_seen[_ext_site(site)] = time.time()
     request = state.ext_requests.pop(site, None) if claim else None
-    if request or (run and state.ext_active_id.get(site) == run):
+    if request:
         state.ext_run_seen[site] = time.time()
-    # 插件里还在跑的任务如果不是服务端当前记录的那个（旧任务残留），叫它停下
-    stale = bool(run) and state.ext_active_id.get(site) != run
-    return {"request": request, "stop": site in state.ext_stop or stale}
+    state.ext_alive(site, run)
+    reason = state.ext_stop_reason(site, run) if run else ""
+    return {"request": request, "stop": bool(reason), "reason": reason}
 
 
 @app.post("/api/ext/job")
@@ -527,6 +542,7 @@ def ext_job(body: dict):
     site = _ext_site(body.get("platform", ""))
     job = Job(**{k: body.get(k) or ([] if k == "tags" else "") for k in JOB_FIELDS})
     key = f"{site}:{job.job_id}"
+    state.ext_alive(site, body.get("run"))
     s, store = state.settings, state.storage()
     try:
         entry = state._screen_one(state.matcher(), store, key, job, tailor_now=False)
@@ -544,14 +560,16 @@ def ext_job(body: dict):
             state.log(f"  今日投递名额已满，不再排队：{job.title}")
     if entry["status"] == "matched" and s["auto_tailor"]:  # 定制简历较慢，放后台生成，不耽误插件
         threading.Thread(target=state._tailor_safe, args=(entry,), daemon=True).start()
+    reason = state.ext_stop_reason(site, body.get("run"))
     return {"key": key, "score": entry["score"], "greeting": entry["greeting"], "apply": apply_it,
-            "stop": site in state.ext_stop}
+            "stop": bool(reason), "reason": reason}
 
 
 @app.post("/api/ext/applied")
 def ext_applied(body: dict):
     entry = state.jobs.get(body.get("key", ""))
     site = entry["platform"] if entry else ""
+    state.ext_alive(site, body.get("run"))
     if entry:
         state.ext_queued[site] = max(0, state.ext_queued.get(site, 0) - 1)
         ok = bool(body.get("ok"))
@@ -562,12 +580,15 @@ def ext_applied(body: dict):
         state.touch_jobs()
         state.log(f"  {'✅ 已投递' if ok else '⚠ 投递失败'}：{entry['title']} @ {entry['company']}"
                   + (f"（{entry['error']}）" if entry["error"] else ""))
-    return {"ok": True, "stop": site in state.ext_stop}
+    reason = state.ext_stop_reason(site, body.get("run")) if site else ""
+    return {"ok": True, "stop": bool(reason), "reason": reason}
 
 
 @app.post("/api/ext/log")
 def ext_log(body: dict):
     label = EXT_SITES.get(body.get("site", ""), {}).get("label", "插件")
+    if body.get("site") in EXT_SITES:
+        state.ext_alive(body["site"], body.get("run"))
     state.log(f"[{label}] {str(body.get('msg', ''))[:300]}")
     return {"ok": True}
 
