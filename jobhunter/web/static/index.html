@@ -124,7 +124,13 @@
       <h2><span class="step">4</span>AI 模型</h2>
       <label>OpenRouter API Key <a href="https://openrouter.ai/keys" target="_blank" class="hint">获取</a></label>
       <input type="password" id="api_key" placeholder="sk-or-...">
-      <label>模型</label><input type="text" id="model">
+      <label>模型（可从下拉选，也可直接填 OpenRouter 上的模型名）</label>
+      <input type="text" id="model" list="modelOptions">
+      <datalist id="modelOptions">
+        <option value="deepseek/deepseek-v4.1-flash">DeepSeek V4.1 Flash · 最便宜，推荐</option>
+        <option value="deepseek/deepseek-v4-pro">DeepSeek V4 Pro · 更强，略贵</option>
+        <option value="anthropic/claude-sonnet-5.5">Claude Sonnet 5.5 · 效果最好，最贵</option>
+      </datalist>
     </div>
   </section>
 

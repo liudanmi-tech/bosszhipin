@@ -45,7 +45,7 @@ DEFAULT_SETTINGS = {
     "auto_apply": False,
     "api_key": "",
     "base_url": "https://openrouter.ai/api/v1",
-    "model": "anthropic/claude-sonnet-5.5",
+    "model": "deepseek/deepseek-v4.1-flash",
 }
 JOB_FIELDS = {f.name for f in fields(Job)}
 
