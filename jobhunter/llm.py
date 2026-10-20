@@ -30,7 +30,12 @@ class LLM:
             },
             timeout=60,
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:  # 把服务商返回的原因带出来（余额不足、模型不可用等）
+            try:
+                reason = resp.json().get("error", {}).get("message") or resp.text
+            except ValueError:
+                reason = resp.text
+            raise RuntimeError(f"AI 接口返回 {resp.status_code}：{str(reason)[:200]}")
         return resp.json()["choices"][0]["message"]["content"]
 
     def chat_json(self, system: str, user: str) -> dict:

@@ -83,8 +83,11 @@ class State:
         self.worker = BrowserWorker()
         self._storage: Storage | None = None
         # 各招聘网站由 Chrome 插件在用户自己的浏览器里操作（见 extension/），以下按网站记录
+        # 每个网站独立运行，互不阻塞
         self.ext_requests: dict[str, dict] = {}  # 等插件领取的任务
-        self.ext_running: set[str] = set()       # 本轮还没结束的网站
+        self.ext_running: dict[str, str] = {}    # 正在跑的网站 → 任务名（筛选/投递）
+        self.ext_active_id: dict[str, str] = {}  # 网站当前任务的 id，插件里残留的旧任务据此叫停
+        self.ext_stop: set[str] = set()          # 被要求停止的网站
         self.ext_seen: dict[str, float] = {}     # 插件最近一次来领任务的时间
         self.ext_queued: dict[str, int] = {}     # 已排进投递队列、尚未回报的数量（计入每日上限）
 
@@ -117,26 +120,38 @@ class State:
     def ext_connected(self, site: str) -> bool:
         return time.time() - self.ext_seen.get(site, 0) < 8
 
+    def ext_task(self) -> str | None:
+        """给页面顶部显示：哪些网站在做什么。"""
+        if not self.ext_running:
+            return None
+        return "、".join(f"{EXT_SITES[s]['label']}{n}" for s, n in self.ext_running.items())
+
     def start_ext(self, name: str, requests: dict[str, dict]) -> None:
         """把任务交给各网站的插件标签页；插件轮询 /api/ext/poll 领取。
 
-        只派给已连接（页面开着）的网站，否则任务会一直等一个不存在的插件，堵住后续操作。
+        只派给已连接（页面开着）且空闲的网站：没打开的网站会让任务一直等下去；
+        各网站互不阻塞，一个网站在跑不影响另一个网站开始。
         """
         self.reap_ext()
-        for site in [s for s in requests if not self.ext_connected(s)]:
-            info = EXT_SITES[site]
-            self.log(f"⚠ [{info['label']}] 未打开，跳过：请用装了插件的 Chrome 打开 {info['url']} 并登录")
-            del requests[site]
+        for site in list(requests):
+            label = EXT_SITES[site]["label"]
+            if site in self.ext_running:
+                self.log(f"⚠ [{label}] 还在{self.ext_running[site]}，跳过（可先点停止）")
+                del requests[site]
+            elif not self.ext_connected(site):
+                self.log(f"⚠ [{label}] 未打开，跳过：请用装了插件的 Chrome 打开 {EXT_SITES[site]['url']} 并登录")
+                del requests[site]
         if not requests:
-            raise HTTPException(400, "勾选的网站都没打开：请先点渠道后面的「打开」，在 Chrome 里打开并登录")
+            raise HTTPException(400, "没有可以开始的网站：请先打开并登录勾选的网站，或等正在运行的结束 / 点停止")
+        base = {"min_delay": self.settings["min_delay_sec"], "max_delay": self.settings["max_delay_sec"]}
         with self.lock:
-            if self.task:
-                raise HTTPException(409, f"正在执行「{self.task}」，请等待完成或点击停止")
-            self.task, self.stop, self.ext_queued = name, False, {}
-            base = {"id": time.time(), "min_delay": self.settings["min_delay_sec"],
-                    "max_delay": self.settings["max_delay_sec"]}
-            self.ext_requests = {site: {**base, **req} for site, req in requests.items()}
-            self.ext_running = set(requests)
+            for site, req in requests.items():
+                rid = str(time.time_ns())
+                self.ext_requests[site] = {**base, **req, "id": rid}
+                self.ext_active_id[site] = rid
+                self.ext_running[site] = name
+                self.ext_stop.discard(site)
+                self.ext_queued[site] = 0
         for site in requests:
             self.log(f"[{EXT_SITES[site]['label']}] 已交给插件开始{name}")
 
@@ -149,12 +164,11 @@ class State:
 
     def finish_ext(self, site: str) -> None:
         self.ext_requests.pop(site, None)
-        if site in self.ext_running:
-            self.ext_running.discard(site)
-            self.log(f"[{EXT_SITES[site]['label']}] 完成")
-        if not self.ext_running and self.task:
-            self.log(f"— {self.task}结束 —")
-            self.task = None
+        self.ext_active_id.pop(site, None)
+        self.ext_stop.discard(site)
+        name = self.ext_running.pop(site, None)
+        if name:
+            self.log(f"— [{EXT_SITES[site]['label']}] {name}结束 —")
 
     def start_task(self, name: str, fn, *args) -> None:
         with self.lock:
@@ -365,7 +379,8 @@ def login(platform: str):
 
 
 @app.post("/api/search")
-def search():
+def search(body: dict | None = None):
+    """开始筛选。插件面板上的「开始」会带 site，只启动那个网站。"""
     s = state.settings
     if not s["resume_text"].strip():
         raise HTTPException(400, "请先上传简历")
@@ -373,7 +388,8 @@ def search():
         raise HTTPException(400, "请至少填写一个职位关键词")
     if not s["api_key"]:
         raise HTTPException(400, "请先填写 OpenRouter API Key")
-    sites = [p for p in s["platforms"] if p in EXT_SITES]
+    only = (body or {}).get("site")
+    sites = [only] if only in EXT_SITES else [p for p in s["platforms"] if p in EXT_SITES]
     if not sites:
         raise HTTPException(400, "请至少勾选一个渠道")
     requests = {}
@@ -411,10 +427,17 @@ def apply(body: dict):
 
 
 @app.post("/api/stop")
-def stop():
-    state.stop = True
-    for site in list(state.ext_requests):  # 插件还没领走的任务直接取消
-        state.finish_ext(site)
+def stop(body: dict | None = None):
+    """停止全部网站；插件面板上的「停止」会带 site，只停那个网站。"""
+    only = (body or {}).get("site")
+    sites = [only] if only in EXT_SITES else list(state.ext_running)
+    for site in sites:
+        if site in state.ext_requests:  # 插件还没领走的任务直接取消
+            state.finish_ext(site)
+        elif site in state.ext_running:
+            state.ext_stop.add(site)
+    if not only:
+        state.stop = True  # 命令行 / 自动化浏览器任务
     state.log("收到停止指令，当前岗位处理完后停止")
     return {"ok": True}
 
@@ -423,7 +446,7 @@ def stop():
 def status(since: int = -1):
     state.reap_ext()
     return {
-        "task": state.task,
+        "task": state.task or state.ext_task(),
         "logs": list(state.logs),
         "logged_in": state.logged_in,
         "version": state.version,
@@ -444,10 +467,12 @@ def _ext_site(site: str) -> str:
 
 
 @app.get("/api/ext/poll")
-def ext_poll(site: str, claim: int = 0):
+def ext_poll(site: str, claim: int = 0, run: str = ""):
     state.ext_seen[_ext_site(site)] = time.time()
     request = state.ext_requests.pop(site, None) if claim else None
-    return {"request": request, "stop": state.stop}
+    # 插件里还在跑的任务如果不是服务端当前记录的那个（旧任务残留），叫它停下
+    stale = bool(run) and state.ext_active_id.get(site) != run
+    return {"request": request, "stop": site in state.ext_stop or stale}
 
 
 @app.post("/api/ext/job")
@@ -457,7 +482,13 @@ def ext_job(body: dict):
     job = Job(**{k: body.get(k) or ([] if k == "tags" else "") for k in JOB_FIELDS})
     key = f"{site}:{job.job_id}"
     s, store = state.settings, state.storage()
-    entry = state._screen_one(state.matcher(), store, key, job, tailor_now=False)
+    try:
+        entry = state._screen_one(state.matcher(), store, key, job, tailor_now=False)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 —— 模型调用失败等，把原因告诉插件
+        state.log(f"  ⚠ 打分失败：{job.title}：{e}")
+        raise HTTPException(502, f"AI 打分失败：{e}") from e
     apply_it = False
     if entry["status"] == "matched" and s["auto_apply"]:
         if store.applied_today(site) + state.ext_queued.get(site, 0) < s["daily_apply_limit"]:
@@ -467,14 +498,15 @@ def ext_job(body: dict):
             state.log(f"  今日投递名额已满，不再排队：{job.title}")
     if entry["status"] == "matched" and s["auto_tailor"]:  # 定制简历较慢，放后台生成，不耽误插件
         threading.Thread(target=state._tailor_safe, args=(entry,), daemon=True).start()
-    return {"key": key, "score": entry["score"], "greeting": entry["greeting"], "apply": apply_it, "stop": state.stop}
+    return {"key": key, "score": entry["score"], "greeting": entry["greeting"], "apply": apply_it,
+            "stop": site in state.ext_stop}
 
 
 @app.post("/api/ext/applied")
 def ext_applied(body: dict):
     entry = state.jobs.get(body.get("key", ""))
+    site = entry["platform"] if entry else ""
     if entry:
-        site = entry["platform"]
         state.ext_queued[site] = max(0, state.ext_queued.get(site, 0) - 1)
         ok = bool(body.get("ok"))
         entry["status"], entry["error"] = ("applied" if ok else "failed"), body.get("error", "")
@@ -484,7 +516,7 @@ def ext_applied(body: dict):
         state.touch_jobs()
         state.log(f"  {'✅ 已投递' if ok else '⚠ 投递失败'}：{entry['title']} @ {entry['company']}"
                   + (f"（{entry['error']}）" if entry["error"] else ""))
-    return {"ok": True, "stop": state.stop}
+    return {"ok": True, "stop": site in state.ext_stop}
 
 
 @app.post("/api/ext/log")
@@ -496,7 +528,9 @@ def ext_log(body: dict):
 
 @app.post("/api/ext/done")
 def ext_done(body: dict):
-    state.finish_ext(_ext_site(body.get("site", "")))
+    site = _ext_site(body.get("site", ""))
+    if body.get("run") in (None, "", state.ext_active_id.get(site)):  # 残留旧任务结束时不影响新任务
+        state.finish_ext(site)
     return {"ok": True}
 
 

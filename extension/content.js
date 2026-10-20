@@ -19,6 +19,9 @@
   const SALARY = /\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?\s*[kK万千](?:[·.]\d+薪)?|面议/;
   const hash = (s) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return "h" + (h >>> 0).toString(36); };
 
+  // BOSS 的薪资数字用动态字体加密（私有区字符），读不出就当作未知，不把乱码交给 AI
+  const plainSalary = (s) => (/[\ue000-\uf8ff]/.test(s) ? "" : s);
+
   // 找文字完全等于 texts 之一的可见元素（按钮、链接）；last=true 取最后出现的（弹窗里的）
   function findByText(texts, exclude, last = false) {
     let hits = $$("a, button, span, div").filter((e) =>
@@ -70,7 +73,7 @@
           job_id: href ? href.split("/job_detail/")[1].split(".html")[0] : "",
           title: textOf(card, ".job-name, .job-title"),
           company: textOf(card, ".boss-name, .company-name, .company-info h3"),
-          salary: textOf(card, ".job-salary, .salary"),
+          salary: plainSalary(textOf(card, ".job-salary, .salary")),
           city: textOf(card, ".company-location, .job-area"),
           url: href ? new URL(href, location.origin).href : "",
           tags: $$(".tag-list li", card).map((e) => e.innerText.trim()),
@@ -210,10 +213,10 @@
     ui = { box: $(".box", root), dot: $(".dot", root), st: $(".st", root), lg: $(".lg", root) };
     $(".hd", root).onclick = () => ui.box.classList.toggle("min");
     $(".go", root).onclick = async () => {
-      const r = await api("/api/search", {});
+      const r = await api("/api/search", { site: siteName });
       if (!r.ok) log("⚠ " + (r.offline ? "连不上本地助手，请先双击 start.command" : r.data.detail), false);
     };
-    $(".stop", root).onclick = async () => { await api("/api/stop", {}); await finish("已手动停止"); };
+    $(".stop", root).onclick = async () => { await api("/api/stop", { site: siteName }); await finish("已手动停止"); };
   }
   const setStatus = (s) => ui.st && (ui.st.textContent = s);
   function log(msg, remote = true) {
@@ -224,9 +227,10 @@
   async function finish(reason) {
     if (!run) return;
     log(`⏹ ${reason}`);
+    const id = run.id;
     run = null;
     await save();
-    await api("/api/ext/done", { site: siteName });
+    await api("/api/ext/done", { site: siteName, run: id });
     setStatus("空闲");
   }
 
@@ -294,10 +298,14 @@
       const r = await api("/api/ext/job", job);
       if (!r.ok) {
         if (r.offline) return finish("连不上本地助手，请确认 start.command 正在运行");
-        log("⚠ " + (r.data.detail || "打分失败"));
-        if (r.status >= 400 && r.status < 500) return finish("配置不完整，请在 8765 网页补全后重试");
+        const why = r.data.detail || `打分失败（${r.status}）`;
+        log("⚠ " + why, false);
+        if (r.status >= 400 && r.status < 500) return finish(why);
+        run.fails = (run.fails || 0) + 1;
+        if (run.fails >= 3) return finish("AI 打分连续失败，请检查 8765 网页里的模型和 API Key：" + why);
         continue;
       }
+      run.fails = 0;
       log(`${r.data.score} 分  ${job.title} @ ${job.company}`, false);
       if (r.data.apply) run.applyQueue.push({ key: r.data.key, url: job.url, greeting: r.data.greeting, title: job.title });
       await save();
@@ -401,7 +409,7 @@
   }
 
   async function poll() {
-    const r = await api(`/api/ext/poll?site=${siteName}&claim=${run ? 0 : 1}`);
+    const r = await api(`/api/ext/poll?site=${siteName}&claim=${run ? 0 : 1}&run=${run ? run.id : ""}`);
     ui.dot && ui.dot.classList.toggle("on", !r.offline);
     if (r.offline) { if (!run) setStatus("未连接本地助手（请双击 start.command）"); return; }
     if (run && r.data.stop) return finish("已停止");
