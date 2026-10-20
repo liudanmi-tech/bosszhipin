@@ -118,7 +118,17 @@ class State:
         return time.time() - self.ext_seen.get(site, 0) < 8
 
     def start_ext(self, name: str, requests: dict[str, dict]) -> None:
-        """把任务交给各网站的插件标签页；插件轮询 /api/ext/poll 领取。"""
+        """把任务交给各网站的插件标签页；插件轮询 /api/ext/poll 领取。
+
+        只派给已连接（页面开着）的网站，否则任务会一直等一个不存在的插件，堵住后续操作。
+        """
+        self.reap_ext()
+        for site in [s for s in requests if not self.ext_connected(s)]:
+            info = EXT_SITES[site]
+            self.log(f"⚠ [{info['label']}] 未打开，跳过：请用装了插件的 Chrome 打开 {info['url']} 并登录")
+            del requests[site]
+        if not requests:
+            raise HTTPException(400, "勾选的网站都没打开：请先点渠道后面的「打开」，在 Chrome 里打开并登录")
         with self.lock:
             if self.task:
                 raise HTTPException(409, f"正在执行「{self.task}」，请等待完成或点击停止")
@@ -128,11 +138,14 @@ class State:
             self.ext_requests = {site: {**base, **req} for site, req in requests.items()}
             self.ext_running = set(requests)
         for site in requests:
-            info = EXT_SITES[site]
-            if self.ext_connected(site):
-                self.log(f"[{info['label']}] 已交给插件开始{name}")
-            else:
-                self.log(f"⚠ [{info['label']}] 插件未连接：请用装了插件的 Chrome 打开 {info['url']} 并登录，打开后自动开始")
+            self.log(f"[{EXT_SITES[site]['label']}] 已交给插件开始{name}")
+
+    def reap_ext(self) -> None:
+        """网站标签页被关掉（30 秒没来轮询）时结束它的任务，免得整轮任务卡住。"""
+        for site in list(self.ext_running):
+            if time.time() - self.ext_seen.get(site, 0) > 30:
+                self.log(f"⚠ [{EXT_SITES[site]['label']}] 页面已关闭或断开，结束该网站的任务")
+                self.finish_ext(site)
 
     def finish_ext(self, site: str) -> None:
         self.ext_requests.pop(site, None)
@@ -408,6 +421,7 @@ def stop():
 
 @app.get("/api/status")
 def status(since: int = -1):
+    state.reap_ext()
     return {
         "task": state.task,
         "logs": list(state.logs),
