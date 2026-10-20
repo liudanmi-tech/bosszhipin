@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from datetime import date
 from pathlib import Path
 
@@ -21,26 +22,31 @@ class Storage:
 
     def __init__(self, path: Path = ROOT / "data" / "jobhunter.db"):
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path)
+        # 网页版会在多个线程里使用同一个连接，用锁串行化
+        self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.executescript(SCHEMA)
+        self.lock = threading.RLock()
 
     def seen(self, job: Job) -> bool:
-        row = self.db.execute(
-            "SELECT 1 FROM jobs WHERE platform=? AND job_id=?", (job.platform, job.job_id)
-        ).fetchone()
+        with self.lock:
+            row = self.db.execute(
+                "SELECT 1 FROM jobs WHERE platform=? AND job_id=?", (job.platform, job.job_id)
+            ).fetchone()
         return row is not None
 
     def record(self, job: Job, match: MatchResult, status: str) -> None:
-        self.db.execute(
-            "INSERT OR REPLACE INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (job.platform, job.job_id, job.title, job.company, job.url, job.salary, job.city,
-             match.score, match.reasons, status,
-             date.today().isoformat() if status == "applied" else None),
-        )
-        self.db.commit()
+        with self.lock:
+            self.db.execute(
+                "INSERT OR REPLACE INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (job.platform, job.job_id, job.title, job.company, job.url, job.salary, job.city,
+                 match.score, match.reasons, status,
+                 date.today().isoformat() if status == "applied" else None),
+            )
+            self.db.commit()
 
     def applied_today(self, platform: str) -> int:
-        return self.db.execute(
-            "SELECT COUNT(*) FROM jobs WHERE platform=? AND status='applied' AND applied_on=?",
-            (platform, date.today().isoformat()),
-        ).fetchone()[0]
+        with self.lock:
+            return self.db.execute(
+                "SELECT COUNT(*) FROM jobs WHERE platform=? AND status='applied' AND applied_on=?",
+                (platform, date.today().isoformat()),
+            ).fetchone()[0]

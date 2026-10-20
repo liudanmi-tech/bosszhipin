@@ -95,7 +95,7 @@
     <div class="card">
       <h2><span class="step">2</span>选择渠道</h2>
       <div id="channels"></div>
-      <div class="hint" style="margin-top:6px">首次使用先点「登录」，在弹出的浏览器里扫码，登录状态会保存。</div>
+      <div class="hint" style="margin-top:6px">BOSS直聘由 Chrome 插件在你自己的浏览器里操作：装好插件后，用 Chrome 打开 BOSS 并登录，保持该标签页开着。</div>
     </div>
 
     <div class="card">
@@ -139,12 +139,15 @@
       <pre id="log"></pre>
     </div>
 
-    <div class="card">
-      <h2>🖥 BOSS 实时画面 <span class="hint" id="screenTime"></span></h2>
-      <div class="hint">程序在单独弹出的 Chrome 窗口里操作（可在程序坞找到它）。下面是那个窗口的实时截图，点击可放大；遇到滑块验证码请到那个窗口里手动完成。</div>
-      <a id="screenLink" href="/api/screen" target="_blank" style="display:none">
-        <img id="screen" alt="实时画面" style="width:100%;margin-top:10px;border:1px solid var(--line);border-radius:8px"></a>
-      <div id="screenEmpty" class="empty" style="padding:24px 0">点「登录」或「开始筛选」后这里会显示浏览器画面</div>
+    <div class="card" id="extHelp" style="display:none">
+      <h2>🧩 安装 BOSS 插件（只需一次）</h2>
+      <ol style="margin:0;padding-left:20px;line-height:2">
+        <li>Chrome 地址栏打开 <code>chrome://extensions</code></li>
+        <li>打开右上角「开发者模式」</li>
+        <li>点「加载已解压的扩展程序」，选择 <code>bosszhipin</code> 文件夹里的 <b>extension</b> 文件夹</li>
+        <li>用这个 Chrome 打开 <a href="https://www.zhipin.com/web/geek/jobs" target="_blank">BOSS直聘</a> 并登录，页面左下角出现「AI 求职助手」小面板即连接成功</li>
+      </ol>
+      <div class="hint">之后在这里点「开始筛选」，插件会在 BOSS 页面里自动搜索、逐个查看岗位、投递。</div>
     </div>
 
     <div class="card">
@@ -192,7 +195,7 @@ async function loadSettings() {
   $("resume_text").value = settings.resume_text;
   $("api_key").placeholder = settings.has_api_key ? "已保存（留空则不修改）" : "sk-or-...";
   showResume(settings.resume_name, settings.resume_text);
-  renderChannels({});
+  renderChannels(false);
 }
 function collect() {
   const body = { notes: $("notes").value, model: $("model").value.trim(), resume_text: $("resume_text").value };
@@ -213,20 +216,17 @@ function showResume(name, text) {
 }
 
 // ---------- 渠道 ----------
-function renderChannels(loggedIn) {
+function renderChannels(extConnected) {
   const chosen = new Set(settings.platforms);
   $("channels").innerHTML = settings.platform_options.map(p => `
     <div class="channel">
       <input type="checkbox" class="ch-box" value="${p.name}" ${chosen.has(p.name) ? "checked" : ""} ${p.ready ? "" : "disabled"}>
       <span class="name">${p.label}</span>
-      ${p.ready ? `<span class="tag ${loggedIn[p.name] ? "ok" : ""}">${loggedIn[p.name] ? "已登录" : "未检测"}</span>
-                   <button onclick="login('${p.name}')">登录</button>`
+      ${p.name === "boss" ? `<span class="tag ${extConnected ? "ok" : ""}">${extConnected ? "插件已连接" : "插件未连接"}</span>
+                   <a href="https://www.zhipin.com/web/geek/jobs" target="_blank"><button>打开 BOSS</button></a>`
                 : `<span class="tag">开发中</span>`}
     </div>`).join("");
-}
-async function login(name) {
-  try { await api(`/api/login/${name}`, { method: "POST" }); toast("浏览器已打开，请扫码登录"); }
-  catch (e) { toast(e.message); }
+  $("extHelp").style.display = extConnected ? "none" : "block";
 }
 
 // ---------- 上传 ----------
@@ -303,7 +303,7 @@ $("btnTailorSel").onclick = async () => {
   version = -1; poll();
 };
 async function applyKeys(keys) {
-  if (!confirm(`确认投递 ${keys.length} 个岗位？浏览器会自动打开岗位页并发送打招呼。`)) return;
+  if (!confirm(`确认投递 ${keys.length} 个岗位？插件会在 BOSS 页面里逐个打开岗位并发送打招呼。`)) return;
   try { await api("/api/apply", { method: "POST", body: JSON.stringify({ keys }) }); keys.forEach(k => selected.delete(k)); toast("开始投递，进度见日志"); }
   catch (e) { toast(e.message); }
 }
@@ -312,7 +312,7 @@ $("btnApplySel").onclick = () => selected.size ? applyKeys([...selected]) : toas
 // ---------- 主按钮 ----------
 $("btnSave").onclick = () => save().catch(e => toast(e.message));
 $("btnSearch").onclick = async () => {
-  try { await save(true); await api("/api/search", { method: "POST" }); toast("开始筛选，浏览器会自动打开"); }
+  try { await save(true); await api("/api/search", { method: "POST" }); toast("已交给 BOSS 插件，进度见日志"); }
   catch (e) { toast(e.message); }
 };
 $("btnStop").onclick = () => api("/api/stop", { method: "POST" });
@@ -324,24 +324,17 @@ async function poll() {
     $("task").textContent = s.task ? `⏳ 正在${s.task}…` : "";
     const log = $("log"), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
     log.textContent = s.logs.join("\n"); if (atBottom) log.scrollTop = log.scrollHeight;
-    if (settings.platform_options && !document.querySelector(".channel button:focus")) renderChannelsKeepChecks(s.logged_in);
-    if (s.screen_at && s.screen_at !== lastScreen) {
-      lastScreen = s.screen_at;
-      $("screen").src = `/api/screen?t=${s.screen_at}`;
-      $("screenLink").href = $("screen").src;
-      $("screenLink").style.display = "block"; $("screenEmpty").style.display = "none";
-      $("screenTime").textContent = "更新于 " + new Date(s.screen_at * 1000).toLocaleTimeString();
-    }
+    if (settings.platform_options) renderChannelsKeepChecks(s.ext_connected);
     if (s.jobs && !(document.activeElement && document.activeElement.dataset.greet)) {
       jobs = s.jobs; version = s.version; renderJobs();
     }
   } catch (e) { $("task").textContent = "⚠ 与本地服务断开"; }
 }
-let lastLogin = "", lastScreen = 0;
-function renderChannelsKeepChecks(loggedIn) {
-  const sig = JSON.stringify(loggedIn); if (sig === lastLogin) return; lastLogin = sig;
+let lastConn = null;
+function renderChannelsKeepChecks(extConnected) {
+  if (extConnected === lastConn) return; lastConn = extConnected;
   settings.platforms = [...document.querySelectorAll(".ch-box:checked")].map(b => b.value);
-  renderChannels(loggedIn);
+  renderChannels(extConnected);
 }
 
 loadSettings().then(poll);

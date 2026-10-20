@@ -17,19 +17,24 @@
 
 > 网页选择器会随网站改版失效。出错时截图会自动保存在 `data/debug/`，发给开发者校准即可。
 
-## 网页版（推荐）
+## 网页版 + BOSS 插件（推荐）
+
+BOSS直聘会封锁被程序控制的浏览器（页面直接跳成空白），所以 BOSS 改由 **Chrome 插件**在你自己的浏览器里操作：没有调试连接，不触发它的反调试检测。
 
 1. 下载代码：`git clone https://github.com/liudanmi-tech/bosszhipin.git`
 2. 在访达里打开 `bosszhipin` 文件夹，**双击 `start.command`**
    - 首次会自动安装依赖（几分钟），之后秒开
    - 如提示"无法验证开发者"：右键 `start.command` → 打开
-3. 浏览器自动打开 <http://127.0.0.1:8765>，在网页里：
+3. 安装插件（只需一次）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选择 `bosszhipin/extension` 文件夹
+4. 用这个 Chrome 打开 [BOSS直聘](https://www.zhipin.com/web/geek/jobs) 并登录，页面左下角出现「AI 求职助手」小面板，保持这个标签页开着
+5. 在 <http://127.0.0.1:8765> 网页里：
    1. 上传 Word / PDF 简历
-   2. 勾选渠道，点「登录」扫码
-   3. 填写职位关键词、城市、薪资、排除项、其他要求
-   4. 填 OpenRouter API Key
-   5. 点「开始筛选」→ AI 打分，并为高分岗位生成定制简历（可下载 Word）和打招呼话术
-   6. 勾选岗位 →「投递选中」，或打开「自动投递」
+   2. 填写职位关键词、城市、薪资、排除项、其他要求
+   3. 填 OpenRouter API Key
+   4. 点「开始筛选」→ 插件在 BOSS 页面里搜索、逐个查看岗位，AI 打分并为高分岗位生成定制简历（可下载 Word）和打招呼话术
+   5. 勾选岗位 →「投递选中」，或打开「自动投递」：插件逐个打开岗位 → 立即沟通 → 发送打招呼
+
+> 点「立即沟通」时 BOSS 会先自动发送你在 BOSS 里设置的默认招呼语，之后插件再发 AI 写的个性化招呼。不想发两条，可以在 BOSS App 里关闭默认招呼语。
 
 ## 命令行版
 
@@ -50,9 +55,10 @@ python -m jobhunter run boss            # 正式投递（默认每次需要回�
 ## 目录结构
 
 ```
+extension/             BOSS直聘 Chrome 插件（content.js 在 BOSS 页面里干活，background.js 转发到本地服务）
 jobhunter/
 ├── __main__.py        CLI：login / run / chat
-├── web/               网页版：FastAPI 后端 + static/index.html
+├── web/               网页版：FastAPI 后端 + static/index.html（/api/ext/* 供插件调用）
 ├── config.py          读取 config.yaml + 简历
 ├── browser.py         Playwright 持久化登录态、随机延时
 ├── llm.py             OpenAI 兼容接口（默认 OpenRouter）
