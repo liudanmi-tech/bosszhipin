@@ -12,21 +12,21 @@
 | 平台 | 登录 | 搜索 | 投递/打招呼 | 消息回复 |
 |------|------|------|-------------|----------|
 | BOSS直聘 | ✅ | ✅ | ✅ | TODO |
-| 猎聘 | TODO | TODO | TODO | TODO |
-| 脉脉 | TODO | TODO | TODO | TODO |
+| 猎聘 | ✅ | ✅（已在真实网站验证） | ✅ 聊一聊 | TODO |
+| 脉脉（测试版） | ✅ | ✅ 通用规则识别 | ✅ 通用规则识别 | TODO |
 
 > 网页选择器会随网站改版失效。出错时截图会自动保存在 `data/debug/`，发给开发者校准即可。
 
-## 网页版 + BOSS 插件（推荐）
+## 网页版 + Chrome 插件（推荐）
 
-BOSS直聘会封锁被程序控制的浏览器（页面直接跳成空白），所以 BOSS 改由 **Chrome 插件**在你自己的浏览器里操作：没有调试连接，不触发它的反调试检测。
+BOSS直聘会封锁被程序控制的浏览器（页面直接跳成空白），所以三个网站都由**同一个 Chrome 插件**在你自己的浏览器里操作：没有调试连接，不触发反调试检测。
 
 1. 下载代码：`git clone https://github.com/liudanmi-tech/bosszhipin.git`
 2. 在访达里打开 `bosszhipin` 文件夹，**双击 `start.command`**
    - 首次会自动安装依赖（几分钟），之后秒开
    - 如提示"无法验证开发者"：右键 `start.command` → 打开
 3. 安装插件（只需一次）：Chrome 打开 `chrome://extensions` → 打开「开发者模式」→「加载已解压的扩展程序」→ 选择 `bosszhipin/extension` 文件夹
-4. 用这个 Chrome 打开 [BOSS直聘](https://www.zhipin.com/web/geek/jobs) 并登录，页面左下角出现「AI 求职助手」小面板，保持这个标签页开着
+4. 用这个 Chrome 打开要用的网站并登录：[BOSS直聘](https://www.zhipin.com/web/geek/jobs) / [猎聘](https://www.liepin.com/zhaopin/) / [脉脉](https://maimai.cn/web/search_center?type=job)。页面左下角出现「AI 求职助手」小面板即连接成功，保持这些标签页开着（三个网站可同时跑）
 5. 在 <http://127.0.0.1:8765> 网页里：
    1. 上传 Word / PDF 简历
    2. 填写职位关键词、城市、薪资、排除项、其他要求
@@ -55,7 +55,7 @@ python -m jobhunter run boss            # 正式投递（默认每次需要回�
 ## 目录结构
 
 ```
-extension/             BOSS直聘 Chrome 插件（content.js 在 BOSS 页面里干活，background.js 转发到本地服务）
+extension/             Chrome 插件（content.js 在招聘网站页面里干活，各网站差异在 SITES 适配里；background.js 转发到本地服务）
 jobhunter/
 ├── __main__.py        CLI：login / run / chat
 ├── web/               网页版：FastAPI 后端 + static/index.html（/api/ext/* 供插件调用）

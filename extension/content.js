@@ -1,18 +1,13 @@
-// AI 求职助手 · BOSS直聘插件
-// 运行在你自己打开的 BOSS 页面里（没有调试连接，不会触发 BOSS 的反调试跳空白页）。
+// AI 求职助手 · 招聘网站插件（BOSS直聘 / 猎聘 / 脉脉）
+// 运行在你自己打开的招聘网站页面里（没有调试连接，不会触发 BOSS 的反调试跳空白页）。
 // 页面跳转会让脚本重新加载，所以运行进度按标签页存在 chrome.storage.local 里，加载后接着做。
 //
-// 流程：搜索阶段  列表页逐个点开岗位 → 发给本地服务打分 → 高分且开启自动投递的进入投递队列
-//       投递阶段  打开岗位详情页 → 点「立即沟通」→「继续沟通」进入聊天页 → 发送打招呼 → 下一个
+// 流程：搜索阶段  列表页逐个查看岗位 → 发给本地服务打分 → 高分且开启自动投递的进入投递队列
+//       投递阶段  打开岗位详情页 → 点沟通按钮 → 在聊天框发送打招呼 → 下一个
+// 每个网站的页面差异都在下面的 SITES 里，改版后在对应 adapter 里校准选择器。
 
 (() => {
   if (window.top !== window) return;
-
-  // 选择器同时兼容新版（/web/geek/jobs，左列表右详情）和旧版页面，改版后在这里校准
-  const CARD = ".job-card-box, .job-card-wrapper";
-  const DESC = ".job-detail-box .desc, .job-detail-body .desc, p.desc, .job-sec-text";
-  const DETAIL_BOX = ".job-detail-box, .job-detail-container, .job-detail";
-  const CHAT_INPUT = "#chat-input, .chat-input[contenteditable], div[contenteditable='true'], textarea.input-area";
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -20,20 +15,16 @@
   const $$ = (s, root = document) => [...root.querySelectorAll(s)];
   const textOf = (root, sel) => { const e = root.querySelector(sel); return e ? e.innerText.trim() : ""; };
   const visible = (e) => !!(e && (e.offsetWidth || e.offsetHeight || e.getClientRects().length));
+  const enc = encodeURIComponent;
+  const SALARY = /\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?\s*[kK万千](?:[·.]\d+薪)?|面议/;
+  const hash = (s) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return "h" + (h >>> 0).toString(36); };
 
-  const path = location.pathname;
-  const page = path.startsWith("/web/geek/job") ? "list"
-    : path.startsWith("/job_detail/") ? "detail"
-    : path.startsWith("/web/geek/chat") ? "chat"
-    : path.includes("security") ? "security" : "other";
-
-  function api(path, body) {
-    return new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage({ type: "api", path, body }, (r) =>
-          resolve(r || { ok: false, offline: true, data: {} }));
-      } catch (e) { resolve({ ok: false, offline: true, data: { detail: String(e) } }); }
-    });
+  // 找文字完全等于 texts 之一的可见元素（按钮、链接）；last=true 取最后出现的（弹窗里的）
+  function findByText(texts, exclude, last = false) {
+    let hits = $$("a, button, span, div").filter((e) =>
+      e !== exclude && visible(e) && e.innerText.length < 12 && texts.includes(e.innerText.trim()));
+    hits = hits.filter((e) => !hits.some((o) => o !== e && e.contains(o))); // 只要最内层（真正的按钮），不要包着它的容器
+    return (last ? hits[hits.length - 1] : hits[0]) || null;
   }
 
   async function waitFor(fn, timeout = 20000, interval = 500) {
@@ -46,11 +37,148 @@
     return null;
   }
 
-  // 找文字完全等于 texts 之一的可见元素（按钮、链接）
-  function findByText(texts, exclude) {
-    const hits = $$("a, button, span, div").filter((e) =>
-      e !== exclude && visible(e) && texts.includes(e.innerText.trim()) && e.innerText.length < 10);
-    return hits[hits.length - 1] || null; // 后出现的（弹窗里的）优先
+  const CHAT_INPUT = "#chat-input, .chat-input[contenteditable], div[contenteditable='true'], textarea.input-area, .im-chat textarea, [class*='chat'] textarea";
+  const chatInput = () => $$(CHAT_INPUT).find(visible) || null;
+
+  // 抓取同站详情页 HTML 并取出职位描述（服务端渲染的网站可用，不用跳转页面）
+  async function fetchDescription(url, selectors) {
+    try {
+      const html = await (await fetch(url, { credentials: "include" })).text();
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      for (const sel of selectors) {
+        const e = doc.querySelector(sel);
+        if (e && e.textContent.trim()) return e.textContent.replace(/\s+\n/g, "\n").replace(/[ \t]+/g, " ").trim().slice(0, 4000);
+      }
+    } catch (e) { /* 拿不到就只用卡片信息 */ }
+    return "";
+  }
+
+  // ======================= 各网站适配 =======================
+  const SITES = {
+    boss: {
+      label: "BOSS直聘",
+      host: /(^|\.)zhipin\.com$/,
+      pageType: (p) => p.startsWith("/web/geek/job") ? "list" : p.startsWith("/job_detail/") ? "detail"
+        : p.startsWith("/web/geek/chat") ? "chat" : p.includes("security") ? "security" : "other",
+      searchUrl: (t) => `https://www.zhipin.com/web/geek/jobs?query=${enc(t.keyword)}&city=${t.city_code}`,
+      onTarget: (t, q) => q.get("query") === t.keyword && q.get("city") === t.city_code,
+      cards: () => $$(".job-card-box, .job-card-wrapper"),
+      cardToJob(card) {
+        const a = card.querySelector("a[href*='/job_detail/']");
+        const href = a ? a.getAttribute("href") : "";
+        return {
+          job_id: href ? href.split("/job_detail/")[1].split(".html")[0] : "",
+          title: textOf(card, ".job-name, .job-title"),
+          company: textOf(card, ".boss-name, .company-name, .company-info h3"),
+          salary: textOf(card, ".job-salary, .salary"),
+          city: textOf(card, ".company-location, .job-area"),
+          url: href ? new URL(href, location.origin).href : "",
+          tags: $$(".tag-list li", card).map((e) => e.innerText.trim()),
+        };
+      },
+      async readDetail(card, job) { // 新版：点卡片本身（不点标题链接），右侧显示详情
+        const DESC = ".job-detail-box .desc, .job-detail-body .desc, p.desc, .job-sec-text";
+        const before = textOf(document, DESC);
+        card.click();
+        await waitFor(() => { const d = textOf(document, DESC); return d && d !== before; }, 8000);
+        job.description = textOf(document, DESC) || textOf(document, ".job-detail-box, .job-detail-container");
+      },
+      chatButton: () => findByText(["立即沟通", "继续沟通"]),
+      contactedTexts: ["继续沟通"],
+      followTexts: ["继续沟通"], // 点击后弹窗「已向BOSS发送消息」→ 继续沟通 进入聊天页
+      loggedOut: () => false,
+    },
+
+    liepin: {
+      label: "猎聘",
+      host: /(^|\.)liepin\.com$/,
+      pageType: (p) => p.startsWith("/zhaopin") ? "list" : /^\/(job|a)\/\d+/.test(p) ? "detail"
+        : /im|chat/.test(p) ? "chat" : "other",
+      searchUrl: (t) => `https://www.liepin.com/zhaopin/?key=${enc(t.keyword)}&dq=${t.city_code}`,
+      onTarget: (t, q) => q.get("key") === t.keyword && q.get("dq") === t.city_code,
+      cards: () => $$("[class*='jobCardPcContainer']"),
+      cardToJob(card) {
+        const a = card.querySelector("a[data-nick='job-detail-job-info'], a[href*='/job/'], a[href*='/a/']");
+        const url = a ? new URL(a.getAttribute("href"), location.origin) : null;
+        const m = url && url.pathname.match(/\/(job|a)\/(\d+)/);
+        const titleBox = card.querySelector("[class*='jobTitleBox']");
+        const parts = titleBox ? $$(".ellipsis-1", titleBox).map((e) => e.innerText.trim()) : [];
+        const text = card.innerText;
+        return {
+          job_id: m ? `${m[1]}${m[2]}` : "",
+          title: parts[0] || "",
+          city: parts[1] || "",
+          company: textOf(card, "[class*='companyName']"),
+          salary: (text.match(SALARY) || [""])[0],
+          url: url ? url.origin + url.pathname : "",
+          tags: text.split("\n").map((s) => s.trim()).filter((s) => /年|本科|硕士|大专|学历/.test(s) && s.length < 8),
+        };
+      },
+      async readDetail(card, job) { // 详情页是服务端渲染的，直接抓取，不用来回跳转
+        card.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+        job.description = await fetchDescription(job.url, [".job-intro-container", ".job-description", "[class*='job-intro']"])
+          || card.innerText;
+      },
+      chatButton: () => $$(".job-apply-container a.btn-main, a.btn-main, a.btn-chat, .job-apply-content button")
+        .find((e) => visible(e) && /聊一聊|继续聊|立即沟通/.test(e.innerText)) || null,
+      contactedTexts: ["继续聊"],
+      followTexts: [],
+      loggedOut: () => !!findByText(["登录/注册", "登录"]),
+    },
+
+    // 脉脉：测试版。搜索需登录，页面结构没能实测，用通用规则识别，可能需要按你的截图校准
+    maimai: {
+      label: "脉脉",
+      host: /(^|\.)maimai\.cn$/,
+      pageType: (p) => p.includes("search_center") ? "list" : /job|position/.test(p) ? "detail"
+        : /chat|message|im/.test(p) ? "chat" : "other",
+      searchUrl: (t) => `https://maimai.cn/web/search_center?type=job&query=${enc(t.keyword)}`,
+      onTarget: (t, q) => q.get("query") === t.keyword,
+      cards() {
+        const seen = new Set();
+        return $$("a[href*='job'], a[href*='position'], a[href*='jid=']")
+          .filter((a) => visible(a) && a.innerText.trim().length > 3)
+          .map((a) => a.closest("li, [class*='item'], [class*='card'], [class*='Item'], [class*='Card']") || a)
+          .filter((c) => !seen.has(c) && seen.add(c));
+      },
+      cardToJob(card) {
+        const a = card.matches("a") ? card : card.querySelector("a[href*='job'], a[href*='position'], a[href*='jid=']");
+        const href = a ? new URL(a.getAttribute("href"), location.origin).href : "";
+        const lines = card.innerText.split("\n").map((s) => s.trim()).filter(Boolean);
+        const id = (href.match(/[?&](?:jid|job_id|id)=(\w+)/) || href.match(/(\d{4,})/) || [])[1];
+        return {
+          job_id: id || hash(lines.slice(0, 2).join("|")),
+          title: lines[0] || "",
+          salary: (card.innerText.match(SALARY) || [""])[0],
+          company: lines.find((l, i) => i > 0 && !SALARY.test(l) && l.length < 30) || "",
+          city: "",
+          url: href,
+          tags: [],
+        };
+      },
+      async readDetail(card, job) {
+        job.description = (job.url && await fetchDescription(job.url, ["[class*='description']", "[class*='detail']", "main"]))
+          || card.innerText;
+      },
+      chatButton: () => findByText(["立即沟通", "沟通", "聊一聊", "申请职位", "立即申请", "投递简历", "继续沟通", "已申请"]),
+      contactedTexts: ["继续沟通", "已申请", "已投递"],
+      followTexts: ["继续沟通", "去聊天", "发消息"],
+      loggedOut: () => /\/login/.test(location.pathname),
+    },
+  };
+
+  const siteName = Object.keys(SITES).find((k) => SITES[k].host.test(location.hostname));
+  if (!siteName) return;
+  const site = SITES[siteName];
+  const page = site.pageType(location.pathname);
+
+  function api(path, body) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: "api", path, body }, (r) =>
+          resolve(r || { ok: false, offline: true, data: {} }));
+      } catch (e) { resolve({ ok: false, offline: true, data: { detail: String(e) } }); }
+    });
   }
 
   // ---------- 运行状态（按标签页保存） ----------
@@ -75,7 +203,7 @@
         .bt{display:flex;gap:8px;margin-top:8px} button{flex:1;border:1px solid #e5e6eb;background:#fff;border-radius:6px;padding:5px;cursor:pointer;font:inherit}
         button.p{background:#00a6a7;border-color:#00a6a7;color:#fff} .min .bd{display:none}
       </style>
-      <div class="box"><div class="hd"><span class="dot"></span><b>AI 求职助手</b><span style="margin-left:auto" class="tg">－</span></div>
+      <div class="box"><div class="hd"><span class="dot"></span><b>AI 求职助手 · ${site.label}</b><span style="margin-left:auto">－</span></div>
         <div class="bd"><div class="st">空闲</div><div class="lg"></div>
           <div class="bt"><button class="p go">开始</button><button class="stop">停止</button></div></div></div>`;
     document.documentElement.appendChild(host);
@@ -83,14 +211,14 @@
     $(".hd", root).onclick = () => ui.box.classList.toggle("min");
     $(".go", root).onclick = async () => {
       const r = await api("/api/search", {});
-      if (!r.ok) log("⚠ " + (r.offline ? "连不上本地助手，请先双击 start.command" : r.data.detail));
+      if (!r.ok) log("⚠ " + (r.offline ? "连不上本地助手，请先双击 start.command" : r.data.detail), false);
     };
     $(".stop", root).onclick = async () => { await api("/api/stop", {}); await finish("已手动停止"); };
   }
   const setStatus = (s) => ui.st && (ui.st.textContent = s);
   function log(msg, remote = true) {
     if (ui.lg) { ui.lg.textContent += (ui.lg.textContent ? "\n" : "") + msg; ui.lg.scrollTop = 1e9; }
-    if (remote) api("/api/ext/log", { msg });
+    if (remote) api("/api/ext/log", { site: siteName, msg });
   }
 
   async function finish(reason) {
@@ -98,14 +226,11 @@
     log(`⏹ ${reason}`);
     run = null;
     await save();
-    await api("/api/ext/done", {});
+    await api("/api/ext/done", { site: siteName });
     setStatus("空闲");
   }
 
   // ---------- 搜索阶段 ----------
-  const searchUrl = (t) =>
-    `https://www.zhipin.com/web/geek/jobs?query=${encodeURIComponent(t.keyword)}&city=${t.city_code}`;
-
   async function doSearch() {
     const task = run.tasks[run.taskIdx];
     if (!task) {
@@ -114,9 +239,7 @@
       log(`搜索完成，待投递 ${run.applyQueue.length} 个`);
       return doApply();
     }
-    const params = new URLSearchParams(location.search);
-    const onTarget = page === "list" && params.get("query") === task.keyword && params.get("city") === task.city_code;
-    if (!onTarget) {
+    if (!(page === "list" && site.onTarget(task, new URLSearchParams(location.search)))) {
       run.navTries = (run.navTries || 0) + 1;
       if (run.navTries > 3) { // 反复跳不到目标页，跳过这个搜索
         log(`⚠ 打不开「${task.keyword}」@ ${task.city} 的搜索页，跳过`);
@@ -126,7 +249,7 @@
       await save();
       log(`🔍 搜索「${task.keyword}」@ ${task.city}`);
       await sleep(rand(800, 1800));
-      location.href = searchUrl(task);
+      location.href = site.searchUrl(task);
       return;
     }
     run.navTries = 0;
@@ -138,49 +261,30 @@
     return doSearch();
   }
 
-  function cardToJob(card) {
-    const a = card.querySelector("a[href*='/job_detail/']");
-    const href = a ? a.getAttribute("href") : "";
-    return {
-      platform: "boss",
-      job_id: href ? href.split("/job_detail/")[1].split(".html")[0] : "",
-      title: textOf(card, ".job-name, .job-title"),
-      company: textOf(card, ".boss-name, .company-name, .company-info h3"),
-      salary: textOf(card, ".job-salary, .salary"),
-      city: textOf(card, ".company-location, .job-area"),
-      url: href ? new URL(href, location.origin).href : "",
-      tags: $$(".tag-list li", card).map((e) => e.innerText.trim()),
-      description: "",
-    };
-  }
-
   async function scanList(task) {
     setStatus(`搜索「${task.keyword}」@ ${task.city}`);
-    if (!(await waitFor(() => $$(CARD).length, 25000))) {
+    if (!(await waitFor(() => site.cards().length, 25000))) {
       log("⚠ 没找到职位列表（页面结构可能变了，或正在安全验证）");
       return;
     }
     const known = new Set(run.known || []);
     let i = 0, viewed = 0, idleScrolls = 0;
     while (run && viewed < run.limit) {
-      const cards = $$(CARD);
+      const cards = site.cards();
       if (i >= cards.length) { // 滚动加载更多
         if (idleScrolls >= 4) break;
         cards[cards.length - 1].scrollIntoView({ block: "end", behavior: "smooth" });
         await sleep(rand(1500, 2500));
-        idleScrolls = $$(CARD).length > cards.length ? 0 : idleScrolls + 1;
+        idleScrolls = site.cards().length > cards.length ? 0 : idleScrolls + 1;
         continue;
       }
       const card = cards[i++];
-      const job = cardToJob(card);
-      if (!job.job_id || known.has(job.job_id)) continue;
+      const job = { platform: siteName, description: "", ...site.cardToJob(card) };
+      if (!job.job_id || !job.title || known.has(job.job_id)) continue;
 
       card.scrollIntoView({ block: "center", behavior: "smooth" });
       await sleep(rand(600, 1400));
-      const before = textOf(document, DESC);
-      card.click(); // 点卡片本身（不点标题链接），右侧显示详情
-      await waitFor(() => { const d = textOf(document, DESC); return d && d !== before; }, 8000);
-      job.description = textOf(document, DESC) || textOf(document, DETAIL_BOX);
+      await site.readDetail(card, job);
       viewed++;
       known.add(job.job_id);
       run.known = [...known];
@@ -203,38 +307,54 @@
   }
 
   // ---------- 投递阶段 ----------
+  // 同一路径，且岗位链接里的参数（如 ?jid=）都一致；网站跳转后改了参数时，以「刚为这个岗位跳转过」为准
+  const samePage = (item) => {
+    const u = new URL(item.url), q = new URLSearchParams(location.search);
+    if (u.origin + u.pathname !== location.origin + location.pathname) return false;
+    return run.navFor === item.key || [...u.searchParams].every(([k, v]) => q.get(k) === v);
+  };
+
   async function doApply() {
     const item = run.applyQueue[run.applyIdx];
     if (!item) return finish(`全部完成，本次投递 ${run.applied || 0} 个`);
     setStatus(`投递 ${run.applyIdx + 1}/${run.applyQueue.length}：${item.title}`);
     if (page === "chat" && run.step === "chat") return sendGreeting(item);
-    if (page === "detail" && location.href.split("?")[0] === item.url.split("?")[0]) return clickChat(item);
+    if (page === "detail" && samePage(item)) return clickChat(item);
+    run.navTries = run.navFor === item.key ? (run.navTries || 0) + 1 : 1;
+    if (run.navTries > 3) return report(item, false, "打不开岗位页");
     run.step = null;
+    run.navFor = item.key;
     await save();
     await sleep(rand(1000, 2500));
     location.href = item.url;
   }
 
   async function clickChat(item) {
-    const btn = await waitFor(() => findByText(["立即沟通", "继续沟通"]), 15000);
-    if (!btn) return report(item, false, "没找到「立即沟通」按钮");
-    if (btn.innerText.includes("继续沟通")) return report(item, false, "之前已经沟通过");
+    if (site.loggedOut()) return finish(`请先在${site.label}登录，然后重新开始`);
+    const btn = await waitFor(site.chatButton, 15000);
+    if (!btn) return report(item, false, "没找到沟通按钮");
+    if (site.contactedTexts.includes(btn.innerText.trim())) return report(item, false, "之前已经沟通过");
     await sleep(rand(1500, 3500)); // 先看看岗位
     run.step = "chat";
     await save();
     btn.click();
-    // 点击后通常弹出「已向BOSS发送消息」，选「继续沟通」进入聊天页
-    const go = await waitFor(() => findByText(["继续沟通"], btn), 6000);
-    if (go) { await sleep(rand(800, 1500)); go.click(); }
-    await sleep(8000);
-    if (page === "detail" && location.pathname.startsWith("/job_detail/")) { // 还在详情页：可能被限制了
-      const tip = $$(".dialog-container, .boss-dialog, .toast, [class*='dialog']").filter(visible).map((e) => e.innerText.trim()).join(" ").slice(0, 80);
-      return report(item, false, "点击后没有进入聊天页" + (tip ? "：" + tip : ""));
+    // 有的网站弹窗问是否继续沟通；有的跳到聊天页（脚本会在新页面接着发）；有的在当前页弹出聊天框
+    if (site.followTexts.length) {
+      const go = await waitFor(() => findByText(site.followTexts, btn, true), 6000);
+      if (go) { await sleep(rand(800, 1500)); go.click(); }
     }
+    const box = await waitFor(chatInput, 8000);
+    if (box) return sendGreeting(item, box);
+    if (site.pageType(location.pathname) !== "detail") return; // 正在跳转到聊天页
+    const tip = $$("[class*='dialog'], [class*='modal'], [class*='toast']").filter(visible)
+      .map((e) => e.innerText.trim()).join(" ").slice(0, 60);
+    if (siteName === "boss") return report(item, false, "点击后没有进入聊天页" + (tip ? "：" + tip : ""));
+    // 猎聘/脉脉点「聊一聊」即已发起沟通（网站通常会自动发默认招呼），只是没找到能发个性化招呼的输入框
+    return report(item, true, "已发起沟通，个性化招呼未发出" + (tip ? "：" + tip : ""));
   }
 
-  async function sendGreeting(item) {
-    const box = await waitFor(() => { const b = $(CHAT_INPUT); return visible(b) && b; }, 20000);
+  async function sendGreeting(item, box) {
+    box = box || await waitFor(chatInput, 20000);
     if (!box) return report(item, false, "没找到聊天输入框");
     await sleep(rand(1500, 3000));
     box.focus();
@@ -245,7 +365,7 @@
       box.dispatchEvent(new Event("input", { bubbles: true }));
     }
     await sleep(rand(800, 1600));
-    const send = findByText(["发送"]) || $(".btn-send, .submit-content .btn");
+    const send = findByText(["发送"]) || $(".btn-send, .submit-content .btn, [class*='send-btn'], [class*='sendBtn']");
     if (send) send.click();
     else box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
     await sleep(1500);
@@ -270,7 +390,7 @@
     if (busy || !run) return;
     busy = true;
     try {
-      if (page === "security") return setStatus("等待 BOSS 安全验证，有滑块请手动完成…");
+      if (page === "security") return setStatus("等待安全验证，有滑块请手动完成…");
       if (run.phase === "search") await doSearch();
       else await doApply();
     } catch (e) {
@@ -281,7 +401,7 @@
   }
 
   async function poll() {
-    const r = await api(`/api/ext/poll?claim=${run ? 0 : 1}&page=${page}`);
+    const r = await api(`/api/ext/poll?site=${siteName}&claim=${run ? 0 : 1}`);
     ui.dot && ui.dot.classList.toggle("on", !r.offline);
     if (r.offline) { if (!run) setStatus("未连接本地助手（请双击 start.command）"); return; }
     if (run && r.data.stop) return finish("已停止");

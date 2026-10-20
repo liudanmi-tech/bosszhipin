@@ -95,7 +95,7 @@
     <div class="card">
       <h2><span class="step">2</span>选择渠道</h2>
       <div id="channels"></div>
-      <div class="hint" style="margin-top:6px">BOSS直聘由 Chrome 插件在你自己的浏览器里操作：装好插件后，用 Chrome 打开 BOSS 并登录，保持该标签页开着。</div>
+      <div class="hint" style="margin-top:6px">由 Chrome 插件在你自己的浏览器里操作：装好插件后，点「打开」用 Chrome 打开勾选的网站并登录，保持这些标签页开着。三个网站可以同时跑。</div>
     </div>
 
     <div class="card">
@@ -145,14 +145,14 @@
     </div>
 
     <div class="card" id="extHelp" style="display:none">
-      <h2>🧩 安装 BOSS 插件（只需一次）</h2>
+      <h2>🧩 安装插件（只需一次，三个网站共用一个插件）</h2>
       <ol style="margin:0;padding-left:20px;line-height:2">
         <li>Chrome 地址栏打开 <code>chrome://extensions</code></li>
         <li>打开右上角「开发者模式」</li>
         <li>点「加载已解压的扩展程序」，选择 <code>bosszhipin</code> 文件夹里的 <b>extension</b> 文件夹</li>
-        <li>用这个 Chrome 打开 <a href="https://www.zhipin.com/web/geek/jobs" target="_blank">BOSS直聘</a> 并登录，页面左下角出现「AI 求职助手」小面板即连接成功</li>
+        <li>用这个 Chrome 打开 <a href="https://www.zhipin.com/web/geek/jobs" target="_blank">BOSS直聘</a> / <a href="https://www.liepin.com/zhaopin/" target="_blank">猎聘</a> / <a href="https://maimai.cn/web/search_center?type=job" target="_blank">脉脉</a> 并登录，页面左下角出现「AI 求职助手」小面板即连接成功</li>
       </ol>
-      <div class="hint">之后在这里点「开始筛选」，插件会在 BOSS 页面里自动搜索、逐个查看岗位、投递。</div>
+      <div class="hint">之后在这里点「开始筛选」，插件会在打开的招聘网站页面里自动搜索、逐个查看岗位、投递。</div>
     </div>
 
     <div class="card">
@@ -203,7 +203,7 @@ async function loadSettings() {
   $("resume_text").value = settings.resume_text;
   $("api_key").placeholder = settings.has_api_key ? "已保存（留空则不修改）" : "sk-or-...";
   showResume(settings.resume_name, settings.resume_text);
-  renderChannels(false);
+  renderChannels({});
 }
 function collect() {
   const body = { notes: $("notes").value, model: $("model").value.trim(), resume_text: $("resume_text").value };
@@ -224,17 +224,16 @@ function showResume(name, text) {
 }
 
 // ---------- 渠道 ----------
-function renderChannels(extConnected) {
+function renderChannels(conn) {
   const chosen = new Set(settings.platforms);
   $("channels").innerHTML = settings.platform_options.map(p => `
     <div class="channel">
-      <input type="checkbox" class="ch-box" value="${p.name}" ${chosen.has(p.name) ? "checked" : ""} ${p.ready ? "" : "disabled"}>
-      <span class="name">${p.label}</span>
-      ${p.name === "boss" ? `<span class="tag ${extConnected ? "ok" : ""}">${extConnected ? "插件已连接" : "插件未连接"}</span>
-                   <a href="https://www.zhipin.com/web/geek/jobs" target="_blank"><button>打开 BOSS</button></a>`
-                : `<span class="tag">开发中</span>`}
+      <input type="checkbox" class="ch-box" value="${p.name}" ${chosen.has(p.name) ? "checked" : ""}>
+      <span class="name">${p.label}${p.beta ? ' <span class="tag">测试版</span>' : ""}</span>
+      <span class="tag ${conn[p.name] ? "ok" : ""}">${conn[p.name] ? "插件已连接" : "未打开"}</span>
+      <a href="${p.url}" target="_blank"><button>打开</button></a>
     </div>`).join("");
-  $("extHelp").style.display = extConnected ? "none" : "block";
+  $("extHelp").style.display = Object.values(conn).some(Boolean) ? "none" : "block";
 }
 
 // ---------- 上传 ----------
@@ -311,7 +310,7 @@ $("btnTailorSel").onclick = async () => {
   version = -1; poll();
 };
 async function applyKeys(keys) {
-  if (!confirm(`确认投递 ${keys.length} 个岗位？插件会在 BOSS 页面里逐个打开岗位并发送打招呼。`)) return;
+  if (!confirm(`确认投递 ${keys.length} 个岗位？插件会在对应网站里逐个打开岗位并发送打招呼。`)) return;
   try { await api("/api/apply", { method: "POST", body: JSON.stringify({ keys }) }); keys.forEach(k => selected.delete(k)); toast("开始投递，进度见日志"); }
   catch (e) { toast(e.message); }
 }
@@ -320,7 +319,7 @@ $("btnApplySel").onclick = () => selected.size ? applyKeys([...selected]) : toas
 // ---------- 主按钮 ----------
 $("btnSave").onclick = () => save().catch(e => toast(e.message));
 $("btnSearch").onclick = async () => {
-  try { await save(true); await api("/api/search", { method: "POST" }); toast("已交给 BOSS 插件，进度见日志"); }
+  try { await save(true); await api("/api/search", { method: "POST" }); toast("已交给插件，进度见日志"); }
   catch (e) { toast(e.message); }
 };
 $("btnStop").onclick = () => api("/api/stop", { method: "POST" });
@@ -339,10 +338,10 @@ async function poll() {
   } catch (e) { $("task").textContent = "⚠ 与本地服务断开"; }
 }
 let lastConn = null;
-function renderChannelsKeepChecks(extConnected) {
-  if (extConnected === lastConn) return; lastConn = extConnected;
+function renderChannelsKeepChecks(conn) {
+  const sig = JSON.stringify(conn); if (sig === lastConn) return; lastConn = sig;
   settings.platforms = [...document.querySelectorAll(".ch-box:checked")].map(b => b.value);
-  renderChannels(extConnected);
+  renderChannels(conn);
 }
 
 loadSettings().then(poll);

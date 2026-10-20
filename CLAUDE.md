@@ -6,7 +6,7 @@ AI 求职代理：Python + Playwright 驱动 BOSS直聘 / 猎聘 / 脉脉网页�
 - `jobhunter/platforms/` — 每个平台一个 `Platform` 子类（见 `base.py` 接口）。新增平台：实现子类并登记到 `platforms/__init__.py` 的 `PLATFORMS`。
 - `jobhunter/matcher.py` — 所有 prompt 都在这里。
 - `jobhunter/storage.py` — SQLite（`data/jobhunter.db`），按 `(platform, job_id)` 去重。
-- `extension/` — BOSS直聘 Chrome 插件（MV3）。`content.js` 在用户自己的 Chrome 里运行：搜索 → 逐个点开岗位 → `POST /api/ext/job` 打分 → 投递队列 → 详情页「立即沟通」→ 聊天页发招呼。页面跳转会重载脚本，进度按标签页存在 `chrome.storage.local`。`background.js` 代为请求 `127.0.0.1:8765`（内容脚本直连会被跨域拦截）。
+- `extension/` — Chrome 插件（MV3），一个插件支持 BOSS直聘 / 猎聘 / 脉脉，网站差异都在 `content.js` 的 `SITES` 适配里（服务端对应 `jobhunter/web/sites.py`）。在用户自己的 Chrome 里运行：搜索 → 逐个查看岗位 → `POST /api/ext/job` 打分 → 投递队列 → 详情页点沟通按钮 → 聊天框发招呼。猎聘详情页是服务端渲染，直接 fetch 取描述；脉脉为测试版，用通用规则识别。页面跳转会重载脚本，进度按标签页存在 `chrome.storage.local`。`background.js` 代为请求 `127.0.0.1:8765`（内容脚本直连会被跨域拦截）。
 - BOSS 不要再用 Playwright/CDP 驱动：BOSS 的反调试脚本会识别并把页面跳到 about:blank。Playwright 版 `platforms/boss.py` 仅保留给命令行。
 
 ## 规则

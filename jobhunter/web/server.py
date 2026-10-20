@@ -16,9 +16,9 @@ from ..llm import LLM
 from ..matcher import Matcher
 from ..models import Job, MatchResult
 from ..platforms import PLATFORMS
-from ..platforms.boss import CITY_CODES
 from ..storage import Storage
 from .resume_docx import markdown_to_docx
+from .sites import EXT_SITES, build_tasks
 from .worker import BrowserWorker
 
 DATA = ROOT / "data"
@@ -82,10 +82,11 @@ class State:
         self.lock = threading.Lock()
         self.worker = BrowserWorker()
         self._storage: Storage | None = None
-        # BOSS 由 Chrome 插件在用户自己的浏览器里操作（见 extension/），这里是交给插件的任务
-        self.ext_request: dict | None = None
-        self.ext_seen = 0.0
-        self.ext_queued = 0  # 本轮已排进投递队列、尚未回报的数量（计入每日上限）
+        # 各招聘网站由 Chrome 插件在用户自己的浏览器里操作（见 extension/），以下按网站记录
+        self.ext_requests: dict[str, dict] = {}  # 等插件领取的任务
+        self.ext_running: set[str] = set()       # 本轮还没结束的网站
+        self.ext_seen: dict[str, float] = {}     # 插件最近一次来领任务的时间
+        self.ext_queued: dict[str, int] = {}     # 已排进投递队列、尚未回报的数量（计入每日上限）
 
     # ---------- 基础 ----------
     def log(self, msg: str) -> None:
@@ -113,20 +114,34 @@ class State:
                 self._storage = Storage()
         return self._storage
 
-    def ext_connected(self) -> bool:
-        return time.time() - self.ext_seen < 8
+    def ext_connected(self, site: str) -> bool:
+        return time.time() - self.ext_seen.get(site, 0) < 8
 
-    def start_ext(self, name: str, request: dict) -> None:
+    def start_ext(self, name: str, requests: dict[str, dict]) -> None:
+        """把任务交给各网站的插件标签页；插件轮询 /api/ext/poll 领取。"""
         with self.lock:
             if self.task:
                 raise HTTPException(409, f"正在执行「{self.task}」，请等待完成或点击停止")
-            self.task, self.stop, self.ext_queued = name, False, 0
-            self.ext_request = {"id": time.time(), "min_delay": self.settings["min_delay_sec"],
-                                "max_delay": self.settings["max_delay_sec"], **request}
-        if self.ext_connected():
-            self.log(f"已交给 BOSS 插件开始{name}，进度见日志")
-        else:
-            self.log("⚠ BOSS 插件未连接：请在 Chrome 里打开 zhipin.com（已安装插件），打开后会自动开始")
+            self.task, self.stop, self.ext_queued = name, False, {}
+            base = {"id": time.time(), "min_delay": self.settings["min_delay_sec"],
+                    "max_delay": self.settings["max_delay_sec"]}
+            self.ext_requests = {site: {**base, **req} for site, req in requests.items()}
+            self.ext_running = set(requests)
+        for site in requests:
+            info = EXT_SITES[site]
+            if self.ext_connected(site):
+                self.log(f"[{info['label']}] 已交给插件开始{name}")
+            else:
+                self.log(f"⚠ [{info['label']}] 插件未连接：请用装了插件的 Chrome 打开 {info['url']} 并登录，打开后自动开始")
+
+    def finish_ext(self, site: str) -> None:
+        self.ext_requests.pop(site, None)
+        if site in self.ext_running:
+            self.ext_running.discard(site)
+            self.log(f"[{EXT_SITES[site]['label']}] 完成")
+        if not self.ext_running and self.task:
+            self.log(f"— {self.task}结束 —")
+            self.task = None
 
     def start_task(self, name: str, fn, *args) -> None:
         with self.lock:
@@ -174,7 +189,7 @@ class State:
         cities = s["cities"] or ["全国"]
         for platform in s["platforms"]:
             cls = PLATFORMS[platform]
-            if platform == "boss":  # BOSS 走 Chrome 插件，不用自动化浏览器
+            if platform in EXT_SITES:  # 这些网站走 Chrome 插件，不用自动化浏览器
                 continue
             if not cls.ready:
                 self.log(f"[{cls.label}] 适配器开发中，跳过")
@@ -294,7 +309,8 @@ def index():
 def get_settings():
     s = dict(state.settings)
     s["has_api_key"] = bool(s.pop("api_key"))
-    s["platform_options"] = [{"name": c.name, "label": c.label, "ready": c.ready} for c in PLATFORMS.values()]
+    s["platform_options"] = [{"name": k, "label": v["label"], "url": v["url"], "beta": v.get("beta", False)}
+                             for k, v in EXT_SITES.items()]
     return s
 
 
@@ -344,39 +360,48 @@ def search():
         raise HTTPException(400, "请至少填写一个职位关键词")
     if not s["api_key"]:
         raise HTTPException(400, "请先填写 OpenRouter API Key")
-    if "boss" not in s["platforms"]:
-        raise HTTPException(400, "请勾选 BOSS直聘（其他渠道开发中）")
-    unknown = [c for c in s["cities"] if c not in CITY_CODES]
-    if unknown:
-        state.log(f"⚠ 这些城市暂不支持，按全国搜索：{'、'.join(unknown)}")
-    tasks = [{"keyword": kw, "city": c, "city_code": CITY_CODES.get(c, CITY_CODES["全国"])}
-             for kw in s["keywords"] for c in (s["cities"] or ["全国"])]
-    known = [j["job_id"] for j in state.jobs.values() if j["platform"] == "boss"]
-    state.start_ext("筛选", {"kind": "search", "tasks": tasks, "limit": s["max_per_search"], "known": known})
+    sites = [p for p in s["platforms"] if p in EXT_SITES]
+    if not sites:
+        raise HTTPException(400, "请至少勾选一个渠道")
+    requests = {}
+    for site in sites:
+        tasks, unknown = build_tasks(site, s["keywords"], s["cities"])
+        if unknown:
+            state.log(f"⚠ [{EXT_SITES[site]['label']}] 这些城市暂不支持，按全国搜索：{'、'.join(unknown)}")
+        known = [j["job_id"] for j in state.jobs.values() if j["platform"] == site]
+        requests[site] = {"kind": "search", "tasks": tasks, "limit": s["max_per_search"], "known": known}
+    state.start_ext("筛选", requests)
     return {"ok": True}
 
 
 @app.post("/api/apply")
 def apply(body: dict):
     entries = [state.jobs[k] for k in body.get("keys", []) if k in state.jobs]
-    entries = [e for e in entries if e["status"] != "applied" and e["url"]]
+    entries = [e for e in entries if e["status"] != "applied" and e["url"] and e["platform"] in EXT_SITES]
     if not entries:
         raise HTTPException(400, "请先勾选要投递的岗位")
-    room = state.settings["daily_apply_limit"] - state.storage().applied_today("boss")
-    if room <= 0:
+    requests = {}
+    for site in dict.fromkeys(e["platform"] for e in entries):
+        mine = [e for e in entries if e["platform"] == site]
+        room = state.settings["daily_apply_limit"] - state.storage().applied_today(site)
+        if room <= 0:
+            state.log(f"⚠ [{EXT_SITES[site]['label']}] 已达今日投递上限，跳过")
+            continue
+        if len(mine) > room:
+            state.log(f"⚠ [{EXT_SITES[site]['label']}] 今日只剩 {room} 个投递名额，只投前 {room} 个")
+        requests[site] = {"kind": "apply", "apply_queue": [
+            {"key": e["key"], "url": e["url"], "greeting": e["greeting"], "title": e["title"]} for e in mine[:room]]}
+    if not requests:
         raise HTTPException(400, "已达今日投递上限")
-    if len(entries) > room:
-        state.log(f"⚠ 今日只剩 {room} 个投递名额，只投前 {room} 个")
-    queue = [{"key": e["key"], "url": e["url"], "greeting": e["greeting"], "title": e["title"]} for e in entries[:room]]
-    state.start_ext("投递", {"kind": "apply", "apply_queue": queue})
+    state.start_ext("投递", requests)
     return {"ok": True}
 
 
 @app.post("/api/stop")
 def stop():
     state.stop = True
-    if state.ext_request:  # 插件还没领走的任务直接取消
-        state.ext_request, state.task = None, None
+    for site in list(state.ext_requests):  # 插件还没领走的任务直接取消
+        state.finish_ext(site)
     state.log("收到停止指令，当前岗位处理完后停止")
     return {"ok": True}
 
@@ -389,7 +414,7 @@ def status(since: int = -1):
         "logged_in": state.logged_in,
         "version": state.version,
         "screen_at": state.screen_at,
-        "ext_connected": state.ext_connected(),
+        "ext_connected": {site: state.ext_connected(site) for site in EXT_SITES},
         "jobs": None if since == state.version else sorted(
             ({k: v for k, v in j.items() if k != "tailored_text"} for j in state.jobs.values()),
             key=lambda j: -j["score"],
@@ -398,27 +423,32 @@ def status(since: int = -1):
 
 
 # ---------- Chrome 插件接口（extension/background.js 代为请求） ----------
+def _ext_site(site: str) -> str:
+    if site not in EXT_SITES:
+        raise HTTPException(400, f"未知网站：{site}")
+    return site
+
+
 @app.get("/api/ext/poll")
-def ext_poll(claim: int = 0):
-    state.ext_seen = time.time()
-    request = None
-    if claim and state.ext_request:
-        request, state.ext_request = state.ext_request, None
+def ext_poll(site: str, claim: int = 0):
+    state.ext_seen[_ext_site(site)] = time.time()
+    request = state.ext_requests.pop(site, None) if claim else None
     return {"request": request, "stop": state.stop}
 
 
 @app.post("/api/ext/job")
 def ext_job(body: dict):
     """插件看完一个岗位后提交，返回打分、打招呼话术，以及是否放进投递队列。"""
+    site = _ext_site(body.get("platform", ""))
     job = Job(**{k: body.get(k) or ([] if k == "tags" else "") for k in JOB_FIELDS})
-    key = f"boss:{job.job_id}"
+    key = f"{site}:{job.job_id}"
     s, store = state.settings, state.storage()
     entry = state._screen_one(state.matcher(), store, key, job, tailor_now=False)
     apply_it = False
     if entry["status"] == "matched" and s["auto_apply"]:
-        if store.applied_today("boss") + state.ext_queued < s["daily_apply_limit"]:
+        if store.applied_today(site) + state.ext_queued.get(site, 0) < s["daily_apply_limit"]:
             apply_it = True
-            state.ext_queued += 1
+            state.ext_queued[site] = state.ext_queued.get(site, 0) + 1
         else:
             state.log(f"  今日投递名额已满，不再排队：{job.title}")
     if entry["status"] == "matched" and s["auto_tailor"]:  # 定制简历较慢，放后台生成，不耽误插件
@@ -429,8 +459,9 @@ def ext_job(body: dict):
 @app.post("/api/ext/applied")
 def ext_applied(body: dict):
     entry = state.jobs.get(body.get("key", ""))
-    state.ext_queued = max(0, state.ext_queued - 1)
     if entry:
+        site = entry["platform"]
+        state.ext_queued[site] = max(0, state.ext_queued.get(site, 0) - 1)
         ok = bool(body.get("ok"))
         entry["status"], entry["error"] = ("applied" if ok else "failed"), body.get("error", "")
         if ok:
@@ -444,15 +475,14 @@ def ext_applied(body: dict):
 
 @app.post("/api/ext/log")
 def ext_log(body: dict):
-    state.log(f"[插件] {str(body.get('msg', ''))[:300]}")
+    label = EXT_SITES.get(body.get("site", ""), {}).get("label", "插件")
+    state.log(f"[{label}] {str(body.get('msg', ''))[:300]}")
     return {"ok": True}
 
 
 @app.post("/api/ext/done")
-def ext_done():
-    if state.task:
-        state.log(f"— {state.task}结束 —")
-    state.task = None
+def ext_done(body: dict):
+    state.finish_ext(_ext_site(body.get("site", "")))
     return {"ok": True}
 
 

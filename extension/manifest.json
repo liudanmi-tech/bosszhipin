@@ -1,15 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "AI 求职助手 · BOSS直聘",
-  "version": "0.1.0",
-  "description": "在 BOSS直聘页面里逐个查看岗位，交给本地 AI 求职助手打分，并发送个性化打招呼。",
-  "permissions": ["storage"],
-  "host_permissions": ["http://127.0.0.1:8765/*"],
-  "background": { "service_worker": "background.js" },
+  "name": "AI 求职助手（BOSS直聘 / 猎聘 / 脉脉）",
+  "version": "0.2.0",
+  "description": "在招聘网站页面里逐个查看岗位，交给本地 AI 求职助手打分，并发送个性化打招呼。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
-      "matches": ["https://www.zhipin.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://www.zhipin.com/*",
+        "https://*.liepin.com/*",
+        "https://maimai.cn/*",
+        "https://*.maimai.cn/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ]
