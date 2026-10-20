@@ -1,5 +1,6 @@
 import json
 import re
+import subprocess
 import threading
 import time
 from collections import deque
@@ -232,7 +233,16 @@ class State:
         self.log(f"  📝 已生成定制简历：{entry['title']} @ {entry['company']}")
 
 
+def _version() -> str:
+    try:
+        return subprocess.run(["git", "log", "-1", "--format=%h %cd", "--date=format:%m-%d %H:%M"],
+                              cwd=ROOT, capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:  # noqa: BLE001
+        return "未知"
+
+
 state = State()
+state.log(f"程序已启动，版本 {_version()}")
 app = FastAPI(title="AI 求职助手")
 
 
