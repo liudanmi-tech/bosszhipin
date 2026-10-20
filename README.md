@@ -25,7 +25,7 @@ pip install -r requirements.txt
 playwright install chromium
 
 cp config.example.yaml config.yaml     # 填写求职偏好
-mkdir resume && vim resume/resume.md   # 放入简历纯文本
+mkdir resume                          # 把 Word 简历复制为 resume/resume.docx
 export OPENROUTER_API_KEY=sk-or-...
 
 python -m jobhunter login boss          # 弹出浏览器，手机扫码登录（只需一次）

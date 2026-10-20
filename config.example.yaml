@@ -1,7 +1,7 @@
 # 复制为 config.yaml 后填写（config.yaml 已被 .gitignore 排除）
 
-# 你的简历纯文本（或用 resume_file 指向一个 .md/.txt 文件）
-resume_file: resume/resume.md
+# 简历文件：支持 Word (.docx) 或纯文本 (.md/.txt)，放在 resume/ 目录下
+resume_file: resume/resume.docx
 
 # 求职偏好：大模型据此给职位打分
 preferences:
