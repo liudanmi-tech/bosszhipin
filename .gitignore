@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 个人隐私数据 —— 绝不提交
+config.yaml
+.env
+data/
+browser_profiles/
+resume/
+*.pdf
+*.docx
+
+# 系统
+.DS_Store
+.idea/
+.vscode/
