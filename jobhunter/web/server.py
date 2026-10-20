@@ -129,7 +129,8 @@ class State:
         return self._storage
 
     def ext_connected(self, site: str) -> bool:
-        return time.time() - self.ext_seen.get(site, 0) < 8
+        # 前台标签页每 3 秒轮询一次；后台标签页被 Chrome 限流后约每分钟一次，也算开着
+        return time.time() - self.ext_seen.get(site, 0) < 75
 
     def ext_task(self) -> str | None:
         """给页面顶部显示：哪些网站在做什么。"""
@@ -171,16 +172,15 @@ class State:
 
     def reap_ext(self) -> None:
         """任务没人做时结束它，免得一直挂着挡住新任务：
-        还没被领走 → 该网站 30 秒没有任何页面开着；
-        已被领走 → 领走它的那个标签页 5 分钟没汇报（被关掉或跳走了）。放宽到 5 分钟是因为
-        Chrome 会把后台标签页的定时器限流到约每分钟一次，切到别的标签页时汇报会变慢。
+        还没被领走 → 该网站 5 分钟没有任何页面来轮询；
+        已被领走 → 领走它的那个标签页 5 分钟没汇报（被关掉或跳走了）。
+        都放宽到 5 分钟：Chrome 会把后台标签页的定时器限流到约每分钟一次，
+        用户在 8765 网页上点开始 / 投递时，招聘网站的标签页通常正在后台。
         """
         now = time.time()
         for site in list(self.ext_running):
-            if site in self.ext_requests:
-                gone = now - self.ext_seen.get(site, 0) > 30
-            else:
-                gone = now - self.ext_run_seen.get(site, 0) > 300
+            last = self.ext_seen.get(site, 0) if site in self.ext_requests else self.ext_run_seen.get(site, 0)
+            gone = now - last > 300
             if gone:
                 self.log(f"⚠ [{EXT_SITES[site]['label']}] 运行任务的页面已关闭或长时间没响应，结束该任务")
                 self.finish_ext(site)

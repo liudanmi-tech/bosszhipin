@@ -492,5 +492,7 @@
     if (run) { setStatus("继续上次的任务…"); await sleep(rand(1500, 3000)); resume(); }
     poll();
     setInterval(poll, 3000);
+    // 后台标签页的定时器会被限流，切回来时立刻领一次任务
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
   })();
 })();
