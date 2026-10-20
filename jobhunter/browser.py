@@ -1,88 +1,40 @@
-import os
 import random
-import subprocess
 import time
-
-import httpx
 
 from playwright.sync_api import BrowserContext, Locator, Page, Playwright
 
 from .config import ROOT
 
-# 去掉最明显的自动化特征（仅在退回 Playwright 自启动浏览器时使用）
+# 去掉最明显的自动化特征（navigator.webdriver 等），让页面看到的是普通浏览器
 STEALTH_JS = """
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
 window.chrome = window.chrome || { runtime: {} };
 """
 
-CHROME_PATHS = [
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    "/usr/bin/google-chrome",
-]
-CDP_PORTS = {"boss": 9333, "liepin": 9334, "maimai": 9335}
-
 
 def open_context(pw: Playwright, platform: str, headless: bool = False) -> BrowserContext:
-    """打开某个平台专用的浏览器，登录态保存在 browser_profiles/ 下，之后复用。
+    """每个平台一个持久化浏览器目录：首次手动扫码登录，之后复用登录态。
 
-    首选：像普通用户一样启动电脑上的 Chrome，再通过调试端口连上去操作。浏览器不是由
-    Playwright 启动的，没有 --enable-automation / navigator.webdriver 等自动化标记，
-    不容易触发招聘网站的风控（BOSS 的 _security_check 反复刷新）。
-    找不到 Chrome 时退回 Playwright 自带的 Chromium。
+    优先使用电脑上安装的正版 Chrome，没有时退回 Playwright 自带的 Chromium。
+    注意：不要改成「带 --remote-debugging-port 启动 Chrome 再 connect_over_cdp」——
+    BOSS 的反调试脚本能识别调试端口，页面会被立刻跳转到 about:blank。
     """
-    chrome = os.environ.get("JOBHUNTER_CHROME") or next((p for p in CHROME_PATHS if os.path.exists(p)), None)
-    if chrome:
-        return _connect_real_chrome(pw, chrome, platform)
-
     profile_dir = ROOT / "browser_profiles" / platform
     profile_dir.mkdir(parents=True, exist_ok=True)
-    ctx = pw.chromium.launch_persistent_context(
-        str(profile_dir),
+    options = dict(
         headless=headless,
         no_viewport=True,
         locale="zh-CN",
         ignore_default_args=["--enable-automation"],
         args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
     )
+    try:
+        ctx = pw.chromium.launch_persistent_context(str(profile_dir), channel="chrome", **options)
+    except Exception:  # noqa: BLE001 —— 未安装 Chrome
+        ctx = pw.chromium.launch_persistent_context(str(profile_dir), **options)
     ctx.add_init_script(STEALTH_JS)
     return ctx
-
-
-def _connect_real_chrome(pw: Playwright, chrome: str, platform: str) -> BrowserContext:
-    port = CDP_PORTS.get(platform, 9339)
-    endpoint = f"http://127.0.0.1:{port}"
-    if not _cdp_alive(endpoint):  # 上次打开的 Chrome 还开着就直接复用
-        profile_dir = ROOT / "browser_profiles" / f"chrome_{platform}"
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        args = [
-            chrome,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={profile_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--start-maximized",
-            *os.environ.get("JOBHUNTER_CHROME_ARGS", "").split(),
-        ]
-        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        for _ in range(40):
-            if _cdp_alive(endpoint):
-                break
-            time.sleep(0.5)
-        else:
-            raise RuntimeError("Chrome 启动失败：调试端口没有响应。请完全退出该 Chrome 窗口后重试")
-    browser = pw.chromium.connect_over_cdp(endpoint)
-    return browser.contexts[0] if browser.contexts else browser.new_context()
-
-
-def _cdp_alive(endpoint: str) -> bool:
-    try:
-        return httpx.get(f"{endpoint}/json/version", timeout=1, trust_env=False).status_code == 200
-    except httpx.HTTPError:
-        return False
 
 
 def human_pause(safety: dict) -> None:
