@@ -124,13 +124,12 @@
       <h2><span class="step">4</span>AI 模型</h2>
       <label>OpenRouter API Key <a href="https://openrouter.ai/keys" target="_blank" class="hint">获取</a></label>
       <input type="password" id="api_key" placeholder="sk-or-...">
-      <label>模型（可从下拉选，也可直接填 OpenRouter 上的模型名）</label>
-      <input type="text" id="model" list="modelOptions">
-      <datalist id="modelOptions">
+      <label>模型</label>
+      <select id="model" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;background:#fff">
         <option value="deepseek/deepseek-v4.1-flash">DeepSeek V4.1 Flash · 最便宜，推荐</option>
         <option value="deepseek/deepseek-v4-pro">DeepSeek V4 Pro · 更强，略贵</option>
         <option value="anthropic/claude-sonnet-5.5">Claude Sonnet 5.5 · 效果最好，最贵</option>
-      </datalist>
+      </select>
     </div>
   </section>
 
@@ -197,7 +196,9 @@ async function loadSettings() {
   LIST_FIELDS.forEach(k => $(k).value = settings[k].join(", "));
   NUM_FIELDS.forEach(k => $(k).value = settings[k]);
   BOOL_FIELDS.forEach(k => $(k).checked = settings[k]);
-  $("notes").value = settings.notes; $("model").value = settings.model;
+  $("notes").value = settings.notes;
+  if (![...$("model").options].some(o => o.value === settings.model)) $("model").add(new Option(settings.model, settings.model));
+  $("model").value = settings.model;
   $("resume_text").value = settings.resume_text;
   $("api_key").placeholder = settings.has_api_key ? "已保存（留空则不修改）" : "sk-or-...";
   showResume(settings.resume_name, settings.resume_text);
