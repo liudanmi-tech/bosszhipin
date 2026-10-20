@@ -17,6 +17,7 @@ from ..matcher import Matcher
 from ..models import Job, MatchResult
 from ..platforms import PLATFORMS
 from ..storage import Storage
+from .providers import KEY_FIELDS, PROVIDERS, default_settings, public_info
 from .resume_docx import markdown_to_docx
 from .sites import EXT_SITES, build_tasks
 from .worker import BrowserWorker
@@ -43,9 +44,7 @@ DEFAULT_SETTINGS = {
     "max_delay_sec": 12,
     "auto_tailor": True,
     "auto_apply": False,
-    "api_key": "",
-    "base_url": "https://openrouter.ai/api/v1",
-    "model": "deepseek/deepseek-v4.1-flash",
+    **default_settings(),  # provider + 每家服务商的 Key / 模型
 }
 JOB_FIELDS = {f.name for f in fields(Job)}
 
@@ -108,8 +107,15 @@ class State:
         if not s["resume_text"].strip():
             raise HTTPException(400, "请先上传简历")
         prefs = {k: s[k] for k in ("keywords", "cities", "salary_min_k", "must_have", "avoid", "notes")}
-        llm = LLM({"base_url": s["base_url"], "model": s["model"], "api_key": s["api_key"]})
-        return Matcher(llm, s["resume_text"], prefs)
+        return Matcher(self.llm(), s["resume_text"], prefs)
+
+    def llm(self) -> LLM:
+        """按网页上选的 AI 服务商创建客户端；没填 Key 时报 400。"""
+        prov = PROVIDERS.get(self.settings["provider"], PROVIDERS["openrouter"])
+        key = self.settings[prov["key_field"]]
+        if not key:
+            raise HTTPException(400, f"请先填写 {prov['label']} 的 API Key")
+        return LLM({"base_url": prov["base_url"], "model": self.settings[prov["model_field"]], "api_key": key})
 
     def storage(self) -> Storage:
         with self.lock:
@@ -335,7 +341,8 @@ def index():
 @app.get("/api/settings")
 def get_settings():
     s = dict(state.settings)
-    s["has_api_key"] = bool(s.pop("api_key"))
+    s["has_key"] = {f: bool(s.pop(f)) for f in KEY_FIELDS}
+    s["providers"] = public_info()
     s["platform_options"] = [{"name": k, "label": v["label"], "url": v["url"], "beta": v.get("beta", False)}
                              for k, v in EXT_SITES.items()]
     return s
@@ -344,7 +351,7 @@ def get_settings():
 @app.post("/api/settings")
 def save_settings(body: dict):
     for k, v in body.items():
-        if k not in DEFAULT_SETTINGS or (k == "api_key" and not v):
+        if k not in DEFAULT_SETTINGS or (k in KEY_FIELDS and not v):  # Key 留空 = 不修改
             continue
         state.settings[k] = v
     _save(SETTINGS_FILE, state.settings)
@@ -354,16 +361,17 @@ def save_settings(body: dict):
 @app.post("/api/test-llm")
 def test_llm():
     """用当前保存的 Key 和模型发一句话，把成功或失败原因直接告诉用户。"""
-    s = state.settings
-    if not s["api_key"]:
-        return {"ok": False, "message": "还没有填写 API Key"}
-    llm = LLM({"base_url": s["base_url"], "model": s["model"], "api_key": s["api_key"]})
+    try:
+        llm = state.llm()
+    except HTTPException as e:
+        return {"ok": False, "message": e.detail}
     started = time.time()
     try:
         reply = llm.chat("你是测试助手。", "回复「连接成功」四个字。")
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "message": str(e)}
-    return {"ok": True, "message": f"{s['model']} 连接成功（{time.time() - started:.1f} 秒）：{reply.strip()[:30]}"}
+    label = PROVIDERS[state.settings["provider"]]["label"]
+    return {"ok": True, "message": f"{label} · {llm.model} 连接成功（{time.time() - started:.1f} 秒）：{reply.strip()[:30]}"}
 
 
 @app.post("/api/resume")
@@ -401,8 +409,7 @@ def search(body: dict | None = None):
         raise HTTPException(400, "请先上传简历")
     if not s["keywords"]:
         raise HTTPException(400, "请至少填写一个职位关键词")
-    if not s["api_key"]:
-        raise HTTPException(400, "请先填写 OpenRouter API Key")
+    state.llm()  # 没填 Key 时直接提示
     only = (body or {}).get("site")
     sites = [only] if only in EXT_SITES else [p for p in s["platforms"] if p in EXT_SITES]
     if not sites:

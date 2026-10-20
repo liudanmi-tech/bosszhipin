@@ -122,14 +122,12 @@
 
     <div class="card">
       <h2><span class="step">4</span>AI 模型</h2>
-      <label>OpenRouter API Key <a href="https://openrouter.ai/keys" target="_blank" class="hint">获取</a></label>
-      <input type="password" id="api_key" placeholder="sk-or-...">
+      <label>服务商</label>
+      <select id="provider" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;background:#fff"></select>
+      <label><span id="keyLabel">API Key</span> <a id="keyLink" href="#" target="_blank" class="hint">获取</a></label>
+      <input type="password" id="api_key">
       <label>模型</label>
-      <select id="model" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;background:#fff">
-        <option value="deepseek/deepseek-v4.1-flash">DeepSeek V4.1 Flash · 最便宜，推荐</option>
-        <option value="deepseek/deepseek-v4-pro">DeepSeek V4 Pro · 更强，略贵</option>
-        <option value="anthropic/claude-sonnet-5.5">Claude Sonnet 5.5 · 效果最好，最贵</option>
-      </select>
+      <select id="model" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;background:#fff"></select>
       <div class="actions" style="margin-top:10px"><button id="btnTestLlm">🔌 测试连接</button></div>
       <div id="llmResult" class="hint" style="margin-top:6px;white-space:pre-wrap"></div>
     </div>
@@ -200,27 +198,45 @@ async function loadSettings() {
   NUM_FIELDS.forEach(k => $(k).value = settings[k]);
   BOOL_FIELDS.forEach(k => $(k).checked = settings[k]);
   $("notes").value = settings.notes;
-  if (![...$("model").options].some(o => o.value === settings.model)) $("model").add(new Option(settings.model, settings.model));
-  $("model").value = settings.model;
+  $("provider").innerHTML = settings.providers.map(p => `<option value="${p.name}">${p.label}</option>`).join("");
+  $("provider").value = settings.provider;
+  renderProvider();
   $("resume_text").value = settings.resume_text;
-  $("api_key").placeholder = settings.has_api_key ? "已保存（留空则不修改）" : "sk-or-...";
   showResume(settings.resume_name, settings.resume_text);
   renderChannels({});
 }
 function collect() {
-  const body = { notes: $("notes").value, model: $("model").value.trim(), resume_text: $("resume_text").value };
+  const prov = currentProvider();
+  const body = { notes: $("notes").value, resume_text: $("resume_text").value, provider: prov.name, [prov.model_field]: $("model").value };
   LIST_FIELDS.forEach(k => body[k] = splitList($(k).value));
   NUM_FIELDS.forEach(k => body[k] = Number($(k).value) || 0);
   BOOL_FIELDS.forEach(k => body[k] = $(k).checked);
   body.platforms = [...document.querySelectorAll(".ch-box:checked")].map(b => b.value);
-  if ($("api_key").value.trim()) body.api_key = $("api_key").value.trim();
+  if ($("api_key").value.trim()) body[prov.key_field] = $("api_key").value.trim();
   return body;
 }
 async function save(quiet) {
   await api("/api/settings", { method: "POST", body: JSON.stringify(collect()) });
-  if ($("api_key").value) { $("api_key").value = ""; $("api_key").placeholder = "已保存（留空则不修改）"; }
+  const prov = currentProvider();
+  settings.provider = prov.name; settings[prov.model_field] = $("model").value;
+  if ($("api_key").value) { settings.has_key[prov.key_field] = true; $("api_key").value = ""; renderProvider(); }
   if (!quiet) toast("已保存");
 }
+// ---------- AI 服务商：切换时换 Key 输入框和模型列表，各家分开保存 ----------
+const currentProvider = () => settings.providers.find(p => p.name === $("provider").value) || settings.providers[0];
+function renderProvider() {
+  const p = currentProvider();
+  $("keyLabel").textContent = `${p.label} API Key`;
+  $("keyLink").href = p.key_url;
+  $("api_key").value = "";
+  $("api_key").placeholder = settings.has_key[p.key_field] ? "已保存（留空则不修改）" : p.key_placeholder;
+  const saved = settings[p.model_field];
+  const opts = p.models.some(([v]) => v === saved) ? p.models : [...p.models, [saved, saved]];
+  $("model").innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+  $("model").value = saved;
+}
+$("provider").onchange = () => { renderProvider(); $("llmResult").textContent = ""; };
+
 function showResume(name, text) {
   $("resumeInfo").innerHTML = name ? `✅ 当前简历：<b>${esc(name)}</b>（识别出 ${text.length} 字）` : "尚未上传";
 }
