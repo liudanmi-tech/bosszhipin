@@ -87,6 +87,7 @@ class State:
         self.ext_running: dict[str, str] = {}    # 正在跑的网站 → 任务名（筛选/投递）
         self.ext_active_id: dict[str, str] = {}  # 网站当前任务的 id，插件里残留的旧任务据此叫停
         self.ext_stop: set[str] = set()          # 被要求停止的网站
+        self.ext_run_seen: dict[str, float] = {}  # 领走任务的那个标签页最近一次汇报的时间
         self.ext_seen: dict[str, float] = {}     # 插件最近一次来领任务的时间
         self.ext_queued: dict[str, int] = {}     # 已排进投递队列、尚未回报的数量（计入每日上限）
 
@@ -139,16 +140,19 @@ class State:
         各网站互不阻塞，一个网站在跑不影响另一个网站开始。
         """
         self.reap_ext()
+        skipped = []
         for site in list(requests):
             label = EXT_SITES[site]["label"]
             if site in self.ext_running:
-                self.log(f"⚠ [{label}] 还在{self.ext_running[site]}，跳过（可先点停止）")
+                skipped.append(f"{label}还在{self.ext_running[site]}（可先点停止）")
                 del requests[site]
             elif not self.ext_connected(site):
-                self.log(f"⚠ [{label}] 未打开，跳过：请用装了插件的 Chrome 打开 {EXT_SITES[site]['url']} 并登录")
+                skipped.append(f"{label}未打开，请用装了插件的 Chrome 打开 {EXT_SITES[site]['url']} 并登录")
                 del requests[site]
+        for why in skipped:
+            self.log(f"⚠ 跳过：{why}")
         if not requests:
-            raise HTTPException(400, "没有可以开始的网站：请先打开并登录勾选的网站，或等正在运行的结束 / 点停止")
+            raise HTTPException(400, "没有可以开始的网站：" + "；".join(skipped))
         base = {"min_delay": self.settings["min_delay_sec"], "max_delay": self.settings["max_delay_sec"]}
         with self.lock:
             for site, req in requests.items():
@@ -162,10 +166,17 @@ class State:
             self.log(f"[{EXT_SITES[site]['label']}] 已交给插件开始{name}")
 
     def reap_ext(self) -> None:
-        """网站标签页被关掉（30 秒没来轮询）时结束它的任务，免得整轮任务卡住。"""
+        """任务没人做时结束它，免得一直挂着挡住新任务：
+        还没被领走 → 该网站没有任何页面开着；已被领走 → 领走它的那个标签页 30 秒没汇报（被关掉或跳走了）。
+        """
+        now = time.time()
         for site in list(self.ext_running):
-            if time.time() - self.ext_seen.get(site, 0) > 30:
-                self.log(f"⚠ [{EXT_SITES[site]['label']}] 页面已关闭或断开，结束该网站的任务")
+            if site in self.ext_requests:
+                gone = now - self.ext_seen.get(site, 0) > 30
+            else:
+                gone = now - self.ext_run_seen.get(site, 0) > 30
+            if gone:
+                self.log(f"⚠ [{EXT_SITES[site]['label']}] 运行任务的页面已关闭或断开，结束该任务")
                 self.finish_ext(site)
 
     def finish_ext(self, site: str) -> None:
@@ -492,6 +503,8 @@ def _ext_site(site: str) -> str:
 def ext_poll(site: str, claim: int = 0, run: str = ""):
     state.ext_seen[_ext_site(site)] = time.time()
     request = state.ext_requests.pop(site, None) if claim else None
+    if request or (run and state.ext_active_id.get(site) == run):
+        state.ext_run_seen[site] = time.time()
     # 插件里还在跑的任务如果不是服务端当前记录的那个（旧任务残留），叫它停下
     stale = bool(run) and state.ext_active_id.get(site) != run
     return {"request": request, "stop": site in state.ext_stop or stale}
