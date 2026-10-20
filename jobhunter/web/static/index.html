@@ -100,7 +100,7 @@
 
     <div class="card">
       <h2><span class="step">3</span>求职要求</h2>
-      <label>职位关键词（逗号分隔，会逐个搜索）</label>
+      <label>职位关键词（逗号分隔，每个单独搜一次；同一次搜索里的多个词用空格，如「海外 AI产品经理」）</label>
       <input type="text" id="keywords" placeholder="例如：AI产品经理, 大模型产品">
       <div class="row">
         <div><label>城市</label><input type="text" id="cities" placeholder="北京, 上海"></div>
@@ -188,7 +188,8 @@ async function api(path, opts = {}) {
   return data;
 }
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const splitList = v => v.split(/[,，、;；\s]+/).map(s => s.trim()).filter(Boolean);
+// 只按逗号/顿号/分号/换行分隔，保留空格：「海外 AI产品经理」是一次搜索
+const splitList = v => v.split(/[,，、;；\n]+/).map(s => s.trim().replace(/\s+/g, " ")).filter(Boolean);
 
 // ---------- 设置 ----------
 async function loadSettings() {
