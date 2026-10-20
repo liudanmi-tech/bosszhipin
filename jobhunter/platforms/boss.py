@@ -158,6 +158,8 @@ class Boss(Platform):
         deadline, warned = time.time() + timeout, False
         while time.time() < deadline:
             self.snap()
+            if self.should_stop():
+                raise RuntimeError("已停止")
             if self.page.locator(selector).count():
                 return
             if self._blocked() and not warned:

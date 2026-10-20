@@ -29,7 +29,7 @@ class BrowserWorker:
         if site is not None:
             try:
                 if site.page.is_closed():
-                    site.page = site.ctx.new_page()
+                    site.page = site._pick_page(site.ctx)
             except Exception:
                 site = None
         if site is None:

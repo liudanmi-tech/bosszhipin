@@ -129,6 +129,7 @@ class State:
         site = self.worker.site(platform, self.safety())
         site.log = self.log
         site.on_snap = self._set_screen
+        site.should_stop = lambda: self.stop
         return site
 
     def _set_screen(self, jpeg: bytes) -> None:

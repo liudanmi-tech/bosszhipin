@@ -23,9 +23,30 @@ class Platform(ABC):
     def __init__(self, ctx: BrowserContext, safety: dict):
         self.ctx = ctx
         self.safety = safety
-        self.page: Page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        self.page: Page = self._pick_page(ctx)
         self.log: Callable[[str], None] = print
+        self.should_stop: Callable[[], bool] = lambda: False
         self.on_snap: Callable[[bytes], None] | None = None  # 网页版「实时画面」
+
+    def _pick_page(self, ctx: BrowserContext) -> Page:
+        """复用已打开的本站标签页，否则新开一个。
+
+        不用 ctx.pages[0]：通过调试端口连接新版 Chrome 时，列表里还有隐藏的
+        chrome://newtab-footer/ 部件（不是真正的标签页，在它上面跳转不可见，关闭它会卡死）。
+        """
+        domain = self.home_url.split("/")[2]
+        page = next((p for p in ctx.pages if domain in p.url), None) or ctx.new_page()
+        for other in ctx.pages:  # 顺手关掉启动时的空白新标签页
+            if other is not page and other.url.startswith(("chrome://new-tab-page", "chrome://newtab/", "about:blank")):
+                try:
+                    other.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        try:
+            page.bring_to_front()
+        except Exception:  # noqa: BLE001
+            pass
+        return page
 
     def ensure_login(self) -> None:
         """打开首页；未登录时等待用户在浏览器里手动扫码。"""
@@ -39,11 +60,17 @@ class Platform(ABC):
         """轮询登录状态（网页版用，无需终端回车）。已在本站且已登录时不再刷新页面。"""
         domain = self.home_url.split("/")[2]
         if domain not in self.page.url or not self.is_logged_in():
-            self.page.goto(self.home_url)
-        for _ in range(timeout_sec // 2):
+            self.page.goto(self.home_url, wait_until="domcontentloaded")
+        self.page.bring_to_front()
+        self.log(f"  当前页面：{self.page.url}")
+        for i in range(timeout_sec // 2):
             self.snap()
+            if self.should_stop():
+                return False
             if self.is_logged_in():
                 return True
+            if i and i % 15 == 0:
+                self.log(f"  仍在等待登录… 当前页面：{self.page.url}")
             self.page.wait_for_timeout(2000)
         return False
 
