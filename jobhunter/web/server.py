@@ -44,6 +44,7 @@ DEFAULT_SETTINGS = {
     "max_delay_sec": 12,
     "auto_tailor": True,
     "auto_apply": False,
+    "browse_speed": "normal",  # 插件查看岗位的节奏 fast / normal / slow；投递间隔仍用 min/max_delay_sec
     **default_settings(),  # provider + 每家服务商的 Key / 模型
 }
 JOB_FIELDS = {f.name for f in fields(Job)}
@@ -79,6 +80,7 @@ class State:
         self.screen_at = 0.0
         self.version = 0
         self.lock = threading.Lock()
+        self.jobs_lock = threading.RLock()  # 保护 self.jobs 的增删和存盘
         self.worker = BrowserWorker()
         self._storage: Storage | None = None
         # 各招聘网站由 Chrome 插件在用户自己的浏览器里操作（见 extension/），以下按网站记录
@@ -96,8 +98,10 @@ class State:
         self.logs.append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
     def touch_jobs(self) -> None:
-        self.version += 1
-        _save(JOBS_FILE, self.jobs)
+        # 插件会并发提交打分，写文件时序列化，避免边改边存
+        with self.jobs_lock:
+            self.version += 1
+            _save(JOBS_FILE, self.jobs)
 
     def safety(self) -> dict:
         s = self.settings
@@ -276,7 +280,8 @@ class State:
             "greeting": match.greeting, "status": "matched" if matched else "low",
             "tailored": False, "error": "",
         }
-        self.jobs[key] = entry
+        with self.jobs_lock:
+            self.jobs[key] = entry
         store.record(job, match, "seen" if matched else "skipped")
         self.touch_jobs()
         self.log(f"  {match.score:>3} 分  {job.title} @ {job.company}")
@@ -324,9 +329,10 @@ class State:
         matcher = matcher or self.matcher()
         job = Job(**{k: v for k, v in entry.items() if k in JOB_FIELDS})
         text = matcher.tailor_resume(job)
-        entry["tailored_text"] = text
         markdown_to_docx(text, DATA / "tailored" / f"{_safe(entry['key'])}.docx")
-        entry["tailored"] = True
+        with self.jobs_lock:
+            entry["tailored_text"] = text
+            entry["tailored"] = True
         self.touch_jobs()
         self.log(f"  📝 已生成定制简历：{entry['title']} @ {entry['company']}")
 
@@ -430,8 +436,10 @@ def search(body: dict | None = None):
         tasks, unknown = build_tasks(site, s["keywords"], s["cities"])
         if unknown:
             state.log(f"⚠ [{EXT_SITES[site]['label']}] 这些城市暂不支持，按全国搜索：{'、'.join(unknown)}")
-        known = [j["job_id"] for j in state.jobs.values() if j["platform"] == site]
-        requests[site] = {"kind": "search", "tasks": tasks, "limit": s["max_per_search"], "known": known}
+        with state.jobs_lock:
+            known = [j["job_id"] for j in state.jobs.values() if j["platform"] == site]
+        requests[site] = {"kind": "search", "tasks": tasks, "limit": s["max_per_search"], "known": known,
+                          "speed": s["browse_speed"]}
     state.start_ext("筛选", requests)
     return {"ok": True}
 
@@ -485,11 +493,14 @@ def status(since: int = -1):
         "version": state.version,
         "screen_at": state.screen_at,
         "ext_connected": {site: state.ext_connected(site) for site in EXT_SITES},
-        "jobs": None if since == state.version else sorted(
-            ({k: v for k, v in j.items() if k != "tailored_text"} for j in state.jobs.values()),
-            key=lambda j: -j["score"],
-        ),
+        "jobs": None if since == state.version else _job_list(),
     }
+
+
+def _job_list() -> list[dict]:
+    with state.jobs_lock:
+        jobs = [{k: v for k, v in j.items() if k != "tailored_text"} for j in state.jobs.values()]
+    return sorted(jobs, key=lambda j: -j["score"])
 
 
 # ---------- Chrome 插件接口（extension/background.js 代为请求） ----------
@@ -604,7 +615,8 @@ def download_resume(key: str):
 
 @app.delete("/api/jobs")
 def clear_jobs():
-    state.jobs.clear()
+    with state.jobs_lock:
+        state.jobs.clear()
     state.touch_jobs()
     return {"ok": True}
 

@@ -30,6 +30,31 @@
     return (last ? hits[hits.length - 1] : hits[0]) || null;
   }
 
+  // 像真人一样点：鼠标移入 → 在元素里移动几下 → 按下 → 停顿 → 松开 → click，坐标随机落在元素内部
+  async function humanClick(el) {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width * rand(0.25, 0.75), y = r.top + r.height * rand(0.3, 0.7);
+    const opts = () => ({ bubbles: true, cancelable: true, view: window, clientX: x + rand(-3, 3), clientY: y + rand(-2, 2), button: 0 });
+    el.dispatchEvent(new PointerEvent("pointerover", opts()));
+    el.dispatchEvent(new MouseEvent("mouseover", opts()));
+    el.dispatchEvent(new MouseEvent("mouseenter", { ...opts(), bubbles: false }));
+    for (let k = 0; k < 3; k++) { el.dispatchEvent(new MouseEvent("mousemove", opts())); await sleep(rand(30, 90)); }
+    el.dispatchEvent(new PointerEvent("pointerdown", opts()));
+    el.dispatchEvent(new MouseEvent("mousedown", opts()));
+    await sleep(rand(60, 160));
+    el.dispatchEvent(new PointerEvent("pointerup", opts()));
+    el.dispatchEvent(new MouseEvent("mouseup", opts()));
+    el.dispatchEvent(new MouseEvent("click", opts()));
+  }
+
+  // 查看岗位的节奏（毫秒）：scroll 滚到卡片后、read 读详情、gap 两个岗位之间。投递间隔不受影响
+  const SPEEDS = {
+    fast: { scroll: [300, 700], read: [500, 1200], gap: [800, 2000] },
+    normal: { scroll: [500, 1100], read: [1000, 2500], gap: [1500, 3500] },
+    slow: { scroll: [600, 1400], read: [1500, 3500], gap: [4000, 10000] },
+  };
+  const pause = ([a, b]) => sleep(rand(a, b));
+
   async function waitFor(fn, timeout = 20000, interval = 500) {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
@@ -82,7 +107,7 @@
       async readDetail(card, job) { // 新版：点卡片本身（不点标题链接），右侧显示详情
         const DESC = ".job-detail-box .desc, .job-detail-body .desc, p.desc, .job-sec-text";
         const before = textOf(document, DESC);
-        card.click();
+        await humanClick(card);
         await waitFor(() => { const d = textOf(document, DESC); return d && d !== before; }, 8000);
         job.description = textOf(document, DESC) || textOf(document, ".job-detail-box, .job-detail-container");
       },
@@ -271,7 +296,9 @@
       log("⚠ 没找到职位列表（页面结构可能变了，或正在安全验证）");
       return;
     }
+    const speed = SPEEDS[run.speed] || SPEEDS.normal;
     const known = new Set(run.known || []);
+    const pending = new Set(); // 正在打分的请求：边看边打分，不等 AI 返回就看下一个
     let i = 0, viewed = 0, idleScrolls = 0;
     while (run && viewed < run.limit) {
       const cards = site.cards();
@@ -287,31 +314,41 @@
       if (!job.job_id || !job.title || known.has(job.job_id)) continue;
 
       card.scrollIntoView({ block: "center", behavior: "smooth" });
-      await sleep(rand(600, 1400));
+      await pause(speed.scroll);
       await site.readDetail(card, job);
+      if (!run) break; // 后台打分出错时可能已经结束了任务
       viewed++;
       known.add(job.job_id);
       run.known = [...known];
       setStatus(`查看第 ${viewed} 个：${job.title}`);
-      await sleep(rand(1500, 3500)); // 像人一样读一会儿
+      await pause(speed.read); // 像人一样读一会儿
+      if (!run) break;
 
-      const r = await api("/api/ext/job", job);
-      if (!r.ok) {
-        if (r.offline) return finish("连不上本地助手，请确认 start.command 正在运行");
-        const why = r.data.detail || `打分失败（${r.status}）`;
-        log("⚠ " + why, false);
-        if (r.status >= 400 && r.status < 500) return finish(why);
-        run.fails = (run.fails || 0) + 1;
-        if (run.fails >= 3) return finish("AI 打分连续失败，请检查 8765 网页里的模型和 API Key：" + why);
-        continue;
-      }
-      run.fails = 0;
-      log(`${r.data.score} 分  ${job.title} @ ${job.company}`, false);
-      if (r.data.apply) run.applyQueue.push({ key: r.data.key, url: job.url, greeting: r.data.greeting, title: job.title });
-      await save();
-      if (r.data.stop) return finish("已停止");
-      await sleep(rand(run.min_delay * 1000, run.max_delay * 1000));
+      while (pending.size >= 3) await Promise.race(pending); // 最多同时打 3 个分
+      const p = scoreJob(job).finally(() => pending.delete(p));
+      pending.add(p);
+      await pause(speed.gap);
     }
+    await Promise.all(pending); // 离开列表页前等所有打分回来，否则高分岗位进不了投递队列
+  }
+
+  async function scoreJob(job) {
+    const r = await api("/api/ext/job", job);
+    if (!run) return;
+    if (!r.ok) {
+      if (r.offline) return finish("连不上本地助手，请确认 start.command 正在运行");
+      const why = r.data.detail || `打分失败（${r.status}）`;
+      log("⚠ " + why, false);
+      if (r.status >= 400 && r.status < 500) return finish(why);
+      run.fails = (run.fails || 0) + 1;
+      if (run.fails >= 3) return finish("AI 打分连续失败，请检查 8765 网页里的模型和 API Key：" + why);
+      return;
+    }
+    run.fails = 0;
+    log(`${r.data.score} 分  ${job.title} @ ${job.company}`, false);
+    if (r.data.apply) run.applyQueue.push({ key: r.data.key, url: job.url, greeting: r.data.greeting, title: job.title });
+    await save();
+    if (r.data.stop) return finish("已停止");
   }
 
   // ---------- 投递阶段 ----------
@@ -345,11 +382,11 @@
     await sleep(rand(1500, 3500)); // 先看看岗位
     run.step = "chat";
     await save();
-    btn.click();
+    await humanClick(btn);
     // 有的网站弹窗问是否继续沟通；有的跳到聊天页（脚本会在新页面接着发）；有的在当前页弹出聊天框
     if (site.followTexts.length) {
       const go = await waitFor(() => findByText(site.followTexts, btn, true), 6000);
-      if (go) { await sleep(rand(800, 1500)); go.click(); }
+      if (go) { await sleep(rand(800, 1500)); await humanClick(go); }
     }
     const box = await waitFor(chatInput, 8000);
     if (box) return sendGreeting(item, box);
@@ -374,7 +411,7 @@
     }
     await sleep(rand(800, 1600));
     const send = findByText(["发送"]) || $(".btn-send, .submit-content .btn, [class*='send-btn'], [class*='sendBtn']");
-    if (send) send.click();
+    if (send) await humanClick(send);
     else box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
     await sleep(1500);
     const left = (box.innerText || box.value || "").trim();

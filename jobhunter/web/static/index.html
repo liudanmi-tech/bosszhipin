@@ -115,6 +115,12 @@
         <div><label>每次搜索最多看几个</label><input type="number" id="max_per_search" min="1" max="60"></div>
         <div><label>每天最多投递</label><input type="number" id="daily_apply_limit" min="1" max="150"></div>
       </div>
+      <label>浏览速度（只影响查看岗位，投递间隔不变）</label>
+      <select id="browse_speed" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;background:#fff">
+        <option value="fast">快 · 每个岗位约 2–4 秒</option>
+        <option value="normal">正常 · 约 3–7 秒</option>
+        <option value="slow">慢 · 约 6–15 秒，最稳</option>
+      </select>
       <label class="switch"><input type="checkbox" id="auto_tailor"> 为高分岗位自动生成定制简历</label>
       <label class="switch"><input type="checkbox" id="auto_apply"> 筛选后自动投递（发送打招呼）</label>
       <div class="hint">建议先关闭自动投递，看几轮筛选结果满意后再打开。</div>
@@ -198,6 +204,7 @@ async function loadSettings() {
   NUM_FIELDS.forEach(k => $(k).value = settings[k]);
   BOOL_FIELDS.forEach(k => $(k).checked = settings[k]);
   $("notes").value = settings.notes;
+  $("browse_speed").value = settings.browse_speed;
   $("provider").innerHTML = settings.providers.map(p => `<option value="${p.name}">${p.label}</option>`).join("");
   $("provider").value = settings.provider;
   renderProvider();
@@ -207,7 +214,8 @@ async function loadSettings() {
 }
 function collect() {
   const prov = currentProvider();
-  const body = { notes: $("notes").value, resume_text: $("resume_text").value, provider: prov.name, [prov.model_field]: $("model").value };
+  const body = { notes: $("notes").value, resume_text: $("resume_text").value, browse_speed: $("browse_speed").value,
+                 provider: prov.name, [prov.model_field]: $("model").value };
   LIST_FIELDS.forEach(k => body[k] = splitList($(k).value));
   NUM_FIELDS.forEach(k => body[k] = Number($(k).value) || 0);
   BOOL_FIELDS.forEach(k => body[k] = $(k).checked);
