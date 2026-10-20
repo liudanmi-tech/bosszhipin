@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 求职助手</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1d2129; --muted: #86909c; --line: #e5e6eb;
+    --brand: #00a6a7; --brand-weak: #e6f7f7; --warn: #ff7d00; --bad: #f53f3f; --good: #00b42a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { background: var(--card); border-bottom: 1px solid var(--line); padding: 14px 24px;
+           display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .task { margin-left: auto; color: var(--brand); font-weight: 600; }
+  main { max-width: 1280px; margin: 0 auto; padding: 20px 16px 60px;
+         display: grid; grid-template-columns: 400px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border-radius: 10px; padding: 18px 20px; margin-bottom: 16px;
+          box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .card h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  .step { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+          background: var(--brand); color: #fff; font-size: 12px; }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
+  input[type=text], input[type=number], input[type=password], textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+    font: inherit; color: inherit; background: #fff; }
+  textarea { resize: vertical; }
+  input:focus, textarea:focus { outline: none; border-color: var(--brand); }
+  .row { display: flex; gap: 10px; } .row > * { flex: 1; }
+  button { border: 1px solid var(--line); background: #fff; color: var(--text); border-radius: 6px;
+           padding: 7px 14px; font: inherit; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--brand); color: var(--brand); }
+  button.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+  button.primary:hover { opacity: .9; color: #fff; }
+  button.danger { color: var(--bad); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .drop { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; text-align: center;
+          color: var(--muted); cursor: pointer; }
+  .drop.over, .drop:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-weak); }
+  .drop b { color: var(--text); }
+  .channel { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+  .channel:last-child { border: 0; }
+  .channel .name { flex: 1; }
+  .tag { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: #f2f3f5; color: var(--muted); }
+  .tag.ok { background: #e8ffea; color: var(--good); }
+  .switch { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--text); font-size: 14px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  #log { background: #1d2129; color: #c9cdd4; font: 12px/1.7 Menlo, monospace; border-radius: 8px;
+         padding: 10px 12px; height: 180px; overflow-y: auto; white-space: pre-wrap; margin: 0; }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .toolbar .count { margin-left: auto; color: var(--muted); }
+  .job { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
+         display: grid; grid-template-columns: 22px 52px 1fr; gap: 10px; }
+  .job.low { opacity: .55; }
+  .score { font-size: 20px; font-weight: 700; text-align: center; line-height: 1.2; }
+  .score small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); }
+  .s-hi { color: var(--good); } .s-mid { color: var(--warn); } .s-lo { color: var(--muted); }
+  .job h3 { margin: 0; font-size: 15px; } .job h3 a { color: inherit; text-decoration: none; }
+  .job h3 a:hover { color: var(--brand); }
+  .meta { color: var(--muted); font-size: 13px; }
+  .reasons { font-size: 13px; margin: 6px 0; }
+  .job textarea { font-size: 13px; }
+  .job .actions { margin-top: 8px; } .job .actions button { padding: 4px 10px; font-size: 13px; }
+  .status { font-size: 12px; padding: 1px 8px; border-radius: 10px; margin-left: 6px; }
+  .st-applied { background: #e8ffea; color: var(--good); } .st-failed { background: #ffece8; color: var(--bad); }
+  .st-matched { background: var(--brand-weak); color: var(--brand); } .st-low { background: #f2f3f5; color: var(--muted); }
+  .empty { text-align: center; color: var(--muted); padding: 40px 0; }
+  #toast { position: fixed; left: 50%; top: 70px; transform: translateX(-50%); background: #1d2129; color: #fff;
+           padding: 8px 16px; border-radius: 6px; display: none; z-index: 10; max-width: 90vw; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 AI 求职助手</h1>
+  <span class="hint">本地运行 · 数据只保存在你的电脑上</span>
+  <span class="task" id="task"></span>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2><span class="step">1</span>上传简历</h2>
+      <div class="drop" id="drop">点击或拖拽上传 <b>Word (.docx)</b> / PDF 简历
+        <input type="file" id="file" accept=".docx,.pdf,.txt,.md" hidden></div>
+      <div id="resumeInfo" class="hint" style="margin-top:8px"></div>
+      <details style="margin-top:6px"><summary class="hint">查看/修改识别出的简历文字</summary>
+        <textarea id="resume_text" rows="10" style="margin-top:6px"></textarea></details>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">2</span>选择渠道</h2>
+      <div id="channels"></div>
+      <div class="hint" style="margin-top:6px">首次使用先点「登录」，在弹出的浏览器里扫码，登录状态会保存。</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">3</span>求职要求</h2>
+      <label>职位关键词（逗号分隔，会逐个搜索）</label>
+      <input type="text" id="keywords" placeholder="例如：AI产品经理, 大模型产品">
+      <div class="row">
+        <div><label>城市</label><input type="text" id="cities" placeholder="北京, 上海"></div>
+        <div><label>最低月薪 (K)</label><input type="number" id="salary_min_k" min="0"></div>
+      </div>
+      <label>必须包含</label><input type="text" id="must_have" placeholder="例如：大模型, AI">
+      <label>排除（命中直接低分）</label><input type="text" id="avoid" placeholder="例如：外包, 驻场, 销售">
+      <label>其他要求（自由描述，AI 会参考）</label>
+      <textarea id="notes" rows="3" placeholder="例如：想去成长期公司，团队 50-500 人，不接受 996，希望带团队"></textarea>
+      <div class="row">
+        <div><label>匹配分数线</label><input type="number" id="threshold" min="0" max="100"></div>
+        <div><label>每次搜索最多看几个</label><input type="number" id="max_per_search" min="1" max="60"></div>
+        <div><label>每天最多投递</label><input type="number" id="daily_apply_limit" min="1" max="150"></div>
+      </div>
+      <label class="switch"><input type="checkbox" id="auto_tailor"> 为高分岗位自动生成定制简历</label>
+      <label class="switch"><input type="checkbox" id="auto_apply"> 筛选后自动投递（发送打招呼）</label>
+      <div class="hint">建议先关闭自动投递，看几轮筛选结果满意后再打开。</div>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">4</span>AI 模型</h2>
+      <label>OpenRouter API Key <a href="https://openrouter.ai/keys" target="_blank" class="hint">获取</a></label>
+      <input type="password" id="api_key" placeholder="sk-or-...">
+      <label>模型</label><input type="text" id="model">
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <div class="actions">
+        <button class="primary" id="btnSearch">🔍 保存并开始筛选</button>
+        <button class="danger" id="btnStop">⏹ 停止</button>
+        <button id="btnSave">保存设置</button>
+      </div>
+      <label>运行日志</label>
+      <pre id="log"></pre>
+    </div>
+
+    <div class="card">
+      <div class="toolbar">
+        <h2 style="margin:0">岗位</h2>
+        <button id="btnPickHigh">选中全部高分</button>
+        <button id="btnTailorSel">📝 为选中生成定制简历</button>
+        <button class="primary" id="btnApplySel">🚀 投递选中</button>
+        <label class="switch" style="margin:0"><input type="checkbox" id="hideLow" checked> 隐藏低分</label>
+        <span class="count" id="count"></span>
+      </div>
+      <div id="jobs"><div class="empty">还没有岗位，填好左侧信息后点「开始筛选」</div></div>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const LIST_FIELDS = ["keywords", "cities", "must_have", "avoid"];
+const NUM_FIELDS = ["salary_min_k", "threshold", "max_per_search", "daily_apply_limit"];
+const BOOL_FIELDS = ["auto_tailor", "auto_apply"];
+let settings = {}, jobs = [], version = -1, selected = new Set();
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 3500);
+}
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const splitList = v => v.split(/[,，、;；\s]+/).map(s => s.trim()).filter(Boolean);
+
+// ---------- 设置 ----------
+async function loadSettings() {
+  settings = await api("/api/settings");
+  LIST_FIELDS.forEach(k => $(k).value = settings[k].join(", "));
+  NUM_FIELDS.forEach(k => $(k).value = settings[k]);
+  BOOL_FIELDS.forEach(k => $(k).checked = settings[k]);
+  $("notes").value = settings.notes; $("model").value = settings.model;
+  $("resume_text").value = settings.resume_text;
+  $("api_key").placeholder = settings.has_api_key ? "已保存（留空则不修改）" : "sk-or-...";
+  showResume(settings.resume_name, settings.resume_text);
+  renderChannels({});
+}
+function collect() {
+  const body = { notes: $("notes").value, model: $("model").value.trim(), resume_text: $("resume_text").value };
+  LIST_FIELDS.forEach(k => body[k] = splitList($(k).value));
+  NUM_FIELDS.forEach(k => body[k] = Number($(k).value) || 0);
+  BOOL_FIELDS.forEach(k => body[k] = $(k).checked);
+  body.platforms = [...document.querySelectorAll(".ch-box:checked")].map(b => b.value);
+  if ($("api_key").value.trim()) body.api_key = $("api_key").value.trim();
+  return body;
+}
+async function save(quiet) {
+  await api("/api/settings", { method: "POST", body: JSON.stringify(collect()) });
+  if ($("api_key").value) { $("api_key").value = ""; $("api_key").placeholder = "已保存（留空则不修改）"; }
+  if (!quiet) toast("已保存");
+}
+function showResume(name, text) {
+  $("resumeInfo").innerHTML = name ? `✅ 当前简历：<b>${esc(name)}</b>（识别出 ${text.length} 字）` : "尚未上传";
+}
+
+// ---------- 渠道 ----------
+function renderChannels(loggedIn) {
+  const chosen = new Set(settings.platforms);
+  $("channels").innerHTML = settings.platform_options.map(p => `
+    <div class="channel">
+      <input type="checkbox" class="ch-box" value="${p.name}" ${chosen.has(p.name) ? "checked" : ""} ${p.ready ? "" : "disabled"}>
+      <span class="name">${p.label}</span>
+      ${p.ready ? `<span class="tag ${loggedIn[p.name] ? "ok" : ""}">${loggedIn[p.name] ? "已登录" : "未检测"}</span>
+                   <button onclick="login('${p.name}')">登录</button>`
+                : `<span class="tag">开发中</span>`}
+    </div>`).join("");
+}
+async function login(name) {
+  try { await api(`/api/login/${name}`, { method: "POST" }); toast("浏览器已打开，请扫码登录"); }
+  catch (e) { toast(e.message); }
+}
+
+// ---------- 上传 ----------
+async function upload(file) {
+  const fd = new FormData(); fd.append("file", file);
+  const res = await fetch("/api/resume", { method: "POST", body: fd });
+  const data = await res.json();
+  if (!res.ok) return toast(data.detail || "上传失败");
+  $("resume_text").value = data.text; showResume(data.name, data.text); toast("简历已上传");
+}
+const drop = $("drop");
+drop.onclick = () => $("file").click();
+$("file").onchange = e => e.target.files[0] && upload(e.target.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]); };
+
+// ---------- 岗位 ----------
+const STATUS = { matched: "待投递", low: "低分", applied: "已投递", failed: "投递失败" };
+function renderJobs() {
+  const hideLow = $("hideLow").checked;
+  const list = jobs.filter(j => !hideLow || j.status !== "low");
+  $("count").textContent = `共 ${jobs.length} 个 · 高分 ${jobs.filter(j => j.status !== "low").length} · 已投 ${jobs.filter(j => j.status === "applied").length} · 已选 ${selected.size}`;
+  if (!list.length) { $("jobs").innerHTML = `<div class="empty">${jobs.length ? "没有高分岗位，可以取消「隐藏低分」查看" : "还没有岗位，填好左侧信息后点「开始筛选」"}</div>`; return; }
+  $("jobs").innerHTML = list.map(j => {
+    const cls = j.score >= settings.threshold ? "s-hi" : j.score >= 60 ? "s-mid" : "s-lo";
+    const k = encodeURIComponent(j.key);
+    return `<div class="job ${j.status === "low" ? "low" : ""}">
+      <input type="checkbox" data-key="${esc(j.key)}" ${selected.has(j.key) ? "checked" : ""} ${j.status === "applied" ? "disabled" : ""}>
+      <div class="score ${cls}">${j.score}<small>匹配分</small></div>
+      <div>
+        <h3><a href="${esc(j.url)}" target="_blank">${esc(j.title)}</a>
+            <span class="status st-${j.status}">${STATUS[j.status] || j.status}</span></h3>
+        <div class="meta">${esc(j.company)} · ${esc(j.salary)} · ${esc(j.city)} · ${esc(j.platform)}</div>
+        <div class="reasons">${esc(j.reasons)}</div>
+        ${j.error ? `<div class="reasons" style="color:var(--bad)">${esc(j.error)}</div>` : ""}
+        <textarea rows="2" data-greet="${esc(j.key)}" title="打招呼话术，可修改">${esc(j.greeting)}</textarea>
+        <div class="actions">
+          <button onclick="tailor('${k}', this)">${j.tailored ? "重新生成定制简历" : "📝 生成定制简历"}</button>
+          ${j.tailored ? `<a href="/api/jobs/${k}/resume"><button>⬇ 下载定制简历</button></a>` : ""}
+          ${j.status !== "applied" ? `<button onclick="applyKeys(['${esc(j.key)}'])">投递</button>` : ""}
+        </div>
+      </div></div>`;
+  }).join("");
+}
+$("jobs").addEventListener("change", e => {
+  const key = e.target.dataset.key;
+  if (key) { e.target.checked ? selected.add(key) : selected.delete(key); renderJobs(); }
+});
+$("jobs").addEventListener("focusout", async e => {
+  const key = e.target.dataset.greet;
+  if (!key) return;
+  const job = jobs.find(j => j.key === key);
+  if (job && job.greeting !== e.target.value) {
+    job.greeting = e.target.value;
+    await api(`/api/jobs/${encodeURIComponent(key)}`, { method: "PATCH", body: JSON.stringify({ greeting: job.greeting }) });
+    toast("话术已保存");
+  }
+});
+$("hideLow").onchange = renderJobs;
+$("btnPickHigh").onclick = () => { jobs.filter(j => j.status === "matched" || j.status === "failed").forEach(j => selected.add(j.key)); renderJobs(); };
+
+async function tailor(k, btn) {
+  btn.disabled = true; btn.textContent = "生成中…";
+  try { await api(`/api/jobs/${k}/tailor`, { method: "POST" }); version = -1; await poll(); toast("定制简历已生成"); }
+  catch (e) { toast(e.message); btn.disabled = false; }
+}
+$("btnTailorSel").onclick = async () => {
+  if (!selected.size) return toast("请先勾选岗位");
+  for (const key of selected) {
+    toast(`正在生成：${jobs.find(j => j.key === key)?.title}`);
+    try { await api(`/api/jobs/${encodeURIComponent(key)}/tailor`, { method: "POST" }); } catch (e) { toast(e.message); break; }
+  }
+  version = -1; poll();
+};
+async function applyKeys(keys) {
+  if (!confirm(`确认投递 ${keys.length} 个岗位？浏览器会自动打开岗位页并发送打招呼。`)) return;
+  try { await api("/api/apply", { method: "POST", body: JSON.stringify({ keys }) }); keys.forEach(k => selected.delete(k)); toast("开始投递，进度见日志"); }
+  catch (e) { toast(e.message); }
+}
+$("btnApplySel").onclick = () => selected.size ? applyKeys([...selected]) : toast("请先勾选岗位");
+
+// ---------- 主按钮 ----------
+$("btnSave").onclick = () => save().catch(e => toast(e.message));
+$("btnSearch").onclick = async () => {
+  try { await save(true); await api("/api/search", { method: "POST" }); toast("开始筛选，浏览器会自动打开"); }
+  catch (e) { toast(e.message); }
+};
+$("btnStop").onclick = () => api("/api/stop", { method: "POST" });
+
+// ---------- 轮询 ----------
+async function poll() {
+  try {
+    const s = await api(`/api/status?since=${version}`);
+    $("task").textContent = s.task ? `⏳ 正在${s.task}…` : "";
+    const log = $("log"), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+    log.textContent = s.logs.join("\n"); if (atBottom) log.scrollTop = log.scrollHeight;
+    if (settings.platform_options && !document.querySelector(".channel button:focus")) renderChannelsKeepChecks(s.logged_in);
+    if (s.jobs && !(document.activeElement && document.activeElement.dataset.greet)) {
+      jobs = s.jobs; version = s.version; renderJobs();
+    }
+  } catch (e) { $("task").textContent = "⚠ 与本地服务断开"; }
+}
+let lastLogin = "";
+function renderChannelsKeepChecks(loggedIn) {
+  const sig = JSON.stringify(loggedIn); if (sig === lastLogin) return; lastLogin = sig;
+  settings.platforms = [...document.querySelectorAll(".ch-box:checked")].map(b => b.value);
+  renderChannels(loggedIn);
+}
+
+loadSettings().then(poll);
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

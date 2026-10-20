@@ -13,6 +13,14 @@ REPLY_SYSTEM = """你代表候选人与招聘方/猎头沟通。语气专业礼�
 回复中给出得体的过渡，并在 JSON 中标记 needs_human=true。
 输出 JSON：{"reply": str, "needs_human": bool}"""
 
+TAILOR_SYSTEM = """你是简历优化专家。根据目标职位，改写候选人的简历，使其更匹配该职位：
+- 调整顺序和措辞，突出与职位最相关的经历、技能和成果，弱化无关内容
+- 使用职位描述中的关键词（仅限候选人确实具备的）
+- 严禁编造任何经历、公司、数据、学历或技能
+- 保留姓名、联系方式、教育背景等基本信息
+用 Markdown 输出完整简历：# 姓名，## 模块标题，- 列表项。
+只输出简历本身，不要附加任何说明、备注或建议——这份简历会直接发给招聘方。"""
+
 
 class Matcher:
     def __init__(self, llm: LLM, resume: str, preferences: dict):
@@ -29,6 +37,13 @@ class Matcher:
         )
         data = self.llm.chat_json(MATCH_SYSTEM, user)
         return MatchResult(int(data["score"]), data.get("reasons", ""), data.get("greeting", ""))
+
+    def tailor_resume(self, job: Job) -> str:
+        user = (
+            f"# 原始简历\n{self.resume}\n\n"
+            f"# 目标职位\n{job.summary()}\n标签：{', '.join(job.tags)}\n描述：\n{job.description}"
+        )
+        return self.llm.chat(TAILOR_SYSTEM, user, temperature=0.4).strip()
 
     def reply(self, job: Job, history: list[dict]) -> dict:
         convo = "\n".join(f"{m['role']}: {m['text']}" for m in history)

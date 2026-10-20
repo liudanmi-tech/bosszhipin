@@ -11,7 +11,7 @@ class LLM:
     def __init__(self, cfg: dict):
         self.base_url = cfg["base_url"].rstrip("/")
         self.model = cfg["model"]
-        self.api_key = os.environ.get(cfg.get("api_key_env", "OPENROUTER_API_KEY"), "")
+        self.api_key = cfg.get("api_key") or os.environ.get(cfg.get("api_key_env", "OPENROUTER_API_KEY"), "")
 
     def chat(self, system: str, user: str, temperature: float = 0.3) -> str:
         headers = {"Content-Type": "application/json"}

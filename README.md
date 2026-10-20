@@ -17,7 +17,21 @@
 
 > 网页选择器会随网站改版失效，首次使用请先用 `--dry-run` 实测。
 
-## 快速开始
+## 网页版（推荐）
+
+1. 下载代码：`git clone https://github.com/liudanmi-tech/bosszhipin.git`
+2. 在访达里打开 `bosszhipin` 文件夹，**双击 `start.command`**
+   - 首次会自动安装依赖（几分钟），之后秒开
+   - 如提示"无法验证开发者"：右键 `start.command` → 打开
+3. 浏览器自动打开 <http://127.0.0.1:8765>，在网页里：
+   1. 上传 Word / PDF 简历
+   2. 勾选渠道，点「登录」扫码
+   3. 填写职位关键词、城市、薪资、排除项、其他要求
+   4. 填 OpenRouter API Key
+   5. 点「开始筛选」→ AI 打分，并为高分岗位生成定制简历（可下载 Word）和打招呼话术
+   6. 勾选岗位 →「投递选中」，或打开「自动投递」
+
+## 命令行版
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -38,6 +52,7 @@ python -m jobhunter run boss            # 正式投递（默认每次需要回�
 ```
 jobhunter/
 ├── __main__.py        CLI：login / run / chat
+├── web/               网页版：FastAPI 后端 + static/index.html
 ├── config.py          读取 config.yaml + 简历
 ├── browser.py         Playwright 持久化登录态、随机延时
 ├── llm.py             OpenAI 兼容接口（默认 OpenRouter）

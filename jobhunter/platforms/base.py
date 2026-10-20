@@ -13,6 +13,8 @@ class Platform(ABC):
 
     name: str = ""
     home_url: str = ""
+    label: str = ""
+    ready: bool = True  # 适配器是否已实现
 
     def __init__(self, ctx: BrowserContext, safety: dict):
         self.ctx = ctx
@@ -26,6 +28,15 @@ class Platform(ABC):
             input(f"[{self.name}] 请在打开的浏览器窗口中扫码登录，完成后按回车继续...")
         if not self.is_logged_in():
             raise RuntimeError(f"[{self.name}] 仍未检测到登录状态")
+
+    def wait_for_login(self, timeout_sec: int = 180) -> bool:
+        """打开首页并轮询登录状态（网页版用，无需终端回车）。"""
+        self.page.goto(self.home_url)
+        for _ in range(timeout_sec // 2):
+            if self.is_logged_in():
+                return True
+            self.page.wait_for_timeout(2000)
+        return False
 
     @abstractmethod
     def is_logged_in(self) -> bool: ...

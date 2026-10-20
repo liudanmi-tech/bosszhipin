@@ -25,9 +25,13 @@ def load_config(path: str | Path = ROOT / "config.yaml", need_resume: bool = Tru
 
 
 def read_resume(path: Path) -> str:
-    """读取简历：支持 Word (.docx) 和纯文本 (.md/.txt)。"""
+    """读取简历：支持 Word (.docx)、PDF 和纯文本 (.md/.txt)。"""
     if path.suffix.lower() == ".doc":
         raise ValueError("不支持旧版 .doc，请在 Word 里「另存为」.docx 格式")
+    if path.suffix.lower() == ".pdf":
+        from pypdf import PdfReader
+
+        return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
     if path.suffix.lower() != ".docx":
         return path.read_text(encoding="utf-8")
 

@@ -15,6 +15,7 @@ class Boss(Platform):
     """BOSS直聘 (zhipin.com)。选择器基于当前网页版，改版后需重新校准。"""
 
     name = "boss"
+    label = "BOSS直聘"
     home_url = "https://www.zhipin.com/web/geek/job"
 
     def is_logged_in(self) -> bool:
