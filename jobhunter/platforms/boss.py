@@ -147,8 +147,9 @@ class Boss(Platform):
 
     # ---------- 风控处理 ----------
     def _blocked(self) -> bool:
+        # 注意：验证通过后地址里仍会带着 ?_security_check=…，不能据此判断为被拦截
         url = self.page.url
-        if "security" in url or "verify" in url or "captcha" in url:
+        if "security.html" in url or "/verify" in url or "captcha" in url:
             return True
         return self.page.locator(".geetest_panel, .geetest_holder, .verify-wrap, #captcha").count() > 0
 

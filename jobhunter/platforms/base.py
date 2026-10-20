@@ -36,8 +36,10 @@ class Platform(ABC):
             raise RuntimeError(f"[{self.name}] 仍未检测到登录状态")
 
     def wait_for_login(self, timeout_sec: int = 180) -> bool:
-        """打开首页并轮询登录状态（网页版用，无需终端回车）。"""
-        self.page.goto(self.home_url)
+        """轮询登录状态（网页版用，无需终端回车）。已在本站且已登录时不再刷新页面。"""
+        domain = self.home_url.split("/")[2]
+        if domain not in self.page.url or not self.is_logged_in():
+            self.page.goto(self.home_url)
         for _ in range(timeout_sec // 2):
             self.snap()
             if self.is_logged_in():

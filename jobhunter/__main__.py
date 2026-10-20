@@ -89,7 +89,10 @@ def main():
                 cmd_run(site, cfg, matcher, Storage(), args.dry_run)
             else:
                 cmd_chat(site, cfg, matcher)
-        ctx.close()
+        try:
+            ctx.close()
+        except Exception:  # noqa: BLE001 —— 连接的是用户的 Chrome，关不掉也没关系
+            pass
 
 
 if __name__ == "__main__":
